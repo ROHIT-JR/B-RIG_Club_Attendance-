@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <!-- Include QR Code generation library locally (CDN for now, but runs in browser) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+        background-color: #f8f9fa;
+        color: #333;
+      }
+      #qrcode-container {
+        background: white;
+        padding: 24px;
+        border-radius: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+      }
+      .url-display {
+        font-size: 14px;
+        color: #666;
+        word-break: break-all;
+        text-align: center;
+        max-width: 80%;
+        margin-bottom: 20px;
+      }
+      button {
+        background: #000;
+        color: #fff;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      button:hover {
+        background: #333;
+      }
+    </style>
+  </head>
+  <body>
+    
+    <div id="qrcode-container"></div>
+    <div class="url-display"><?= url ?></div>
+    
+    <button onclick="fullscreen()">View Fullscreen</button>
+
+    <script>
+      // The URL is injected by Apps Script templating engine
+      const url = "<?= url ?>";
+      
+      // Generate QR Code
+      new QRCode(document.getElementById("qrcode-container"), {
+        text: url,
+        width: 300,
+        height: 300,
+        colorDark : "#0f172a", // Dark navy
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.H
+      });
+
+      function fullscreen() {
+        const el = document.documentElement;
+        if (el.requestFullscreen) {
+          el.requestFullscreen();
+        } else if (el.webkitRequestFullscreen) { /* Safari */
+          el.webkitRequestFullscreen();
+        } else if (el.msRequestFullscreen) { /* IE11 */
+          el.msRequestFullscreen();
+        }
+      }
+    </script>
+  </body>
+</html>

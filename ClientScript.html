@@ -1,0 +1,311 @@
+<script>
+  // State
+  let sessionToken = null;
+  let currentRollNo = null;
+  let currentFullName = null;
+
+  // DOM Elements
+  const views = {
+    loading: document.getElementById('view-loading'),
+    invalid: document.getElementById('view-invalid'),
+    rollInput: document.getElementById('view-roll-input'),
+    confirm: document.getElementById('view-confirm'),
+    register: document.getElementById('view-register'),
+    success: document.getElementById('view-success')
+  };
+
+  const elements = {
+    invalidReason: document.getElementById('invalid-reason'),
+    clubTitle: document.getElementById('club-title'),
+    formRoll: document.getElementById('form-roll'),
+    rollError: document.getElementById('roll-error'),
+    btnRollContinue: document.getElementById('btn-roll-continue'),
+    
+    confirmAvatar: document.getElementById('confirm-avatar'),
+    confirmName: document.getElementById('confirm-name'),
+    confirmRoll: document.getElementById('confirm-roll'),
+    formConfirm: document.getElementById('form-confirm'),
+    confirmError: document.getElementById('confirm-error'),
+    btnConfirmAttendance: document.getElementById('btn-confirm-attendance'),
+    btnConfirmBack: document.getElementById('btn-confirm-back'),
+    
+    formRegister: document.getElementById('form-register'),
+    regRollNumber: document.getElementById('regRollNumber'),
+    regFullName: document.getElementById('regFullName'),
+    registerError: document.getElementById('register-error'),
+    btnRegisterAttendance: document.getElementById('btn-register-attendance'),
+    btnRegisterBack: document.getElementById('btn-register-back'),
+    
+    successMessage: document.getElementById('success-message')
+  };
+
+  function showView(viewName) {
+    Object.values(views).forEach(v => {
+      v.classList.remove('active');
+      v.classList.add('hidden');
+    });
+    views[viewName].classList.remove('hidden');
+    views[viewName].classList.add('active');
+  }
+
+  function showError(element, message) {
+    element.textContent = message;
+    element.classList.remove('hidden');
+  }
+
+  function hideError(element) {
+    element.classList.add('hidden');
+  }
+
+  function setButtonLoading(btn, isLoading, originalText) {
+    if (isLoading) {
+      btn.disabled = true;
+      btn.innerHTML = `<span style="display:inline-block; margin-right:8px; width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top-color:#fff; border-radius:50%; animation:spin 1s linear infinite;"></span> Wait...`;
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = originalText;
+    }
+  }
+
+  // Initialization
+  document.addEventListener('DOMContentLoaded', () => {
+    // Google Apps Script strips URL params in the iframe, so we use the server-injected token
+    const urlParams = new URLSearchParams(window.location.search);
+    sessionToken = (typeof SERVER_SESSION_TOKEN !== 'undefined' && SERVER_SESSION_TOKEN !== '') 
+      ? SERVER_SESSION_TOKEN 
+      : urlParams.get('session');
+
+    if (!sessionToken) {
+      elements.invalidReason.textContent = "No session token provided in URL.";
+      showView('invalid');
+      return;
+    }
+
+    // Verify session
+    google.script.run
+      .withSuccessHandler(res => {
+        if (!res.valid) {
+          elements.invalidReason.textContent = res.reason;
+          showView('invalid');
+        } else {
+          if (res.clubName) {
+            elements.clubTitle.textContent = res.clubName + " Attendance";
+          }
+          if (res.date) {
+            document.getElementById('roll-subtitle').textContent = "Marking attendance for: " + res.date;
+          }
+          showView('rollInput');
+        }
+      })
+      .withFailureHandler(err => {
+        elements.invalidReason.textContent = "Failed to connect to server.";
+        showView('invalid');
+      })
+      .getClientSessionDetails(sessionToken);
+  });
+
+  // Roll Number Submit
+  elements.formRoll.addEventListener('submit', (e) => {
+    e.preventDefault();
+    hideError(elements.rollError);
+    
+    const rollNo = document.getElementById('rollNumber').value.trim();
+    if (!rollNo) return;
+
+    currentRollNo = rollNo;
+    setButtonLoading(elements.btnRollContinue, true, 'Continue');
+
+    google.script.run
+      .withSuccessHandler(res => {
+        setButtonLoading(elements.btnRollContinue, false, 'Continue');
+        if (res.exists) {
+          currentFullName = res.fullName;
+          currentRollNo = res.rollNumber; // normalized
+          
+          elements.confirmName.textContent = currentFullName;
+          elements.confirmRoll.textContent = currentRollNo;
+          elements.confirmAvatar.textContent = currentFullName.charAt(0).toUpperCase();
+          
+          showView('confirm');
+        } else {
+          elements.regRollNumber.value = currentRollNo;
+          elements.regFullName.value = '';
+          showView('register');
+        }
+      })
+      .withFailureHandler(err => {
+        setButtonLoading(elements.btnRollContinue, false, 'Continue');
+        showError(elements.rollError, "An error occurred. Please try again.");
+      })
+      .validateRollNo(rollNo);
+  });
+
+  // Confirm "Not me" Button
+  elements.btnConfirmBack.addEventListener('click', () => {
+    currentRollNo = null;
+    currentFullName = null;
+    document.getElementById('rollNumber').value = '';
+    showView('rollInput');
+  });
+
+  // Register "Cancel" Button
+  elements.btnRegisterBack.addEventListener('click', () => {
+    currentRollNo = null;
+    document.getElementById('rollNumber').value = '';
+    showView('rollInput');
+  });
+
+  // Confirm Attendance Submit
+  elements.formConfirm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    hideError(elements.confirmError);
+    setButtonLoading(elements.btnConfirmAttendance, true, 'Confirm attendance');
+
+    google.script.run
+      .withSuccessHandler(res => {
+        setButtonLoading(elements.btnConfirmAttendance, false, 'Confirm attendance');
+        handleAttendanceResponse(res, elements.confirmError);
+      })
+      .withFailureHandler(err => {
+        setButtonLoading(elements.btnConfirmAttendance, false, 'Confirm attendance');
+        showError(elements.confirmError, "Network error. Please try again.");
+      })
+      .submitAttendance(sessionToken, currentRollNo, currentFullName, false);
+  });
+
+  // Register Attendance Submit
+  elements.formRegister.addEventListener('submit', (e) => {
+    e.preventDefault();
+    hideError(elements.registerError);
+    
+    const regRoll = elements.regRollNumber.value.trim();
+    const regName = elements.regFullName.value.trim();
+    
+    if (!regRoll || !regName) {
+      showError(elements.registerError, "All fields are required.");
+      return;
+    }
+
+    setButtonLoading(elements.btnRegisterAttendance, true, 'Register & Mark Attendance');
+
+    google.script.run
+      .withSuccessHandler(res => {
+        setButtonLoading(elements.btnRegisterAttendance, false, 'Register & Mark Attendance');
+        handleAttendanceResponse(res, elements.registerError);
+      })
+      .withFailureHandler(err => {
+        setButtonLoading(elements.btnRegisterAttendance, false, 'Register & Mark Attendance');
+        showError(elements.registerError, err.message || "Network error. Please try again.");
+      })
+      .submitAttendance(sessionToken, regRoll, regName, true);
+  });
+
+  let tiltSetup = false;
+  
+  function setupTilt() {
+    if (tiltSetup) return;
+    tiltSetup = true;
+    if (window.DeviceOrientationEvent) {
+      window.addEventListener('deviceorientation', (e) => {
+        let x = e.gamma; // In degree in the range [-90,90]
+        let y = e.beta;  // In degree in the range [-180,180]
+        if (x === null || y === null) return;
+        
+        // Limit tilt limits
+        if (x > 45) x = 45;
+        if (x < -45) x = -45;
+        if (y > 45) y = 45;
+        if (y < -45) y = -45;
+
+        // Multiply to get a strong pixel shift
+        const shiftX = (x / 45) * 200;
+        const shiftY = (y / 45) * 100;
+        
+        document.body.style.setProperty('--tilt-x', shiftX + 'px');
+        document.body.style.setProperty('--tilt-y', shiftY + 'px');
+      });
+    }
+  }
+
+  function triggerConfetti() {
+    setupTilt();
+    const logoUrl = "https://avatars.githubusercontent.com/u/129193826?s=400&u=1fcd80a193fc7377208d6fb5a02686bcc8754f66&v=4";
+    const container = document.body;
+    
+    // 1. Fast Explosion Coins (40 coins)
+    for (let i = 0; i < 40; i++) {
+      spawnCoin(logoUrl, container, 'explosion');
+    }
+    
+    // 2. Slow Raining Coins to fill screen (150 coins)
+    for (let i = 0; i < 150; i++) {
+      spawnCoin(logoUrl, container, 'rain');
+    }
+  }
+
+  function spawnCoin(logoUrl, container, type) {
+    const coin = document.createElement('img');
+    coin.src = logoUrl;
+    coin.className = 'coin-confetti';
+    
+    let startX, startY, midX, midY, endX, endY, duration, delay;
+    
+    // Size variation creates a 3D parallax depth effect (20px to 70px)
+    const size = 20 + Math.random() * 50; 
+    
+    // Pile up completely at the bottom or off-screen (75vh to 110vh) so it doesn't block UI
+    endY = (75 + Math.random() * 35) + 'vh';
+    endX = (Math.random() - 0.5) * window.innerWidth + 'px';
+    const rotMid = (Math.random() - 0.5) * 720 + 'deg';
+    const rotEnd = (Math.random() - 0.5) * 2000 + 'deg';
+
+    if (type === 'explosion') {
+      startX = '-50%';
+      startY = '-50%';
+      const velocity = 200 + Math.random() * 400;
+      const angle = Math.random() * Math.PI * 2;
+      midX = Math.cos(angle) * velocity + 'px';
+      midY = Math.sin(angle) * velocity + 'px';
+      duration = 1.5 + Math.random() * 1.5;
+      delay = 0;
+    } else {
+      // Rain
+      startX = (Math.random() - 0.5) * window.innerWidth + 'px';
+      startY = '-120vh'; // fall from high up
+      midX = startX;
+      midY = '-20vh';
+      duration = 3 + Math.random() * 4; // slow fall
+      delay = Math.random() * 10; // stagger over 10 solid seconds!
+    }
+    
+    coin.style.left = '50%';
+    coin.style.top = '50%';
+    coin.style.animationDuration = duration + 's';
+    coin.style.animationDelay = delay + 's';
+    coin.style.setProperty('--size', size + 'px');
+    coin.style.setProperty('--start-x', startX);
+    coin.style.setProperty('--start-y', startY);
+    coin.style.setProperty('--mid-x', midX);
+    coin.style.setProperty('--mid-y', midY);
+    coin.style.setProperty('--end-x', endX);
+    coin.style.setProperty('--end-y', endY);
+    coin.style.setProperty('--rot-mid', rotMid);
+    coin.style.setProperty('--rot-end', rotEnd);
+    
+    container.appendChild(coin);
+  }
+
+  function handleAttendanceResponse(res, errorElement) {
+    if (res.success) {
+      showView('success');
+      triggerConfetti();
+    } else if (res.duplicate) {
+      const timeStr = new Date(res.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      elements.successMessage.innerHTML = `Your attendance was already recorded at <strong>${timeStr}</strong>.`;
+      showView('success');
+      triggerConfetti();
+    } else {
+      showError(errorElement, res.error || "Failed to mark attendance.");
+    }
+  }
+</script>

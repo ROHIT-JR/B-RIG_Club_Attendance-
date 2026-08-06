@@ -1,0 +1,149 @@
+/**
+ * Database interactions and sheet helpers.
+ */
+
+const DB = {
+  
+  /**
+   * Safe wrapper for spreadsheet operations using LockService.
+   * Prevents race conditions during concurrent check-ins.
+   * @param {Function} callback Function to execute while lock is held.
+   * @returns {*} Result of the callback.
+   */
+  withLock: function(callback) {
+    const lock = LockService.getScriptLock();
+    try {
+      // Wait up to 10 seconds for other processes to finish.
+      lock.waitLock(10000);
+    } catch (e) {
+      console.error('Lock Error: Could not obtain lock.', e);
+      throw new Error('System is busy. Please try again in a moment.');
+    }
+    
+    try {
+      return callback();
+    } catch (e) {
+      console.error('Operation failed:', e);
+      throw new Error('Error: ' + e.message);
+    } finally {
+      lock.releaseLock();
+    }
+  },
+
+  /**
+   * Retrieves all active students from the Students sheet.
+   * @returns {Array} Array of student objects.
+   */
+  getActiveStudents: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
+    if (!sheet) return [];
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const rollIndex = headers.indexOf('Roll Number');
+    const nameIndex = headers.indexOf('Full Name');
+    const statusIndex = headers.indexOf('Status');
+
+    const students = [];
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][statusIndex] === CONFIG.STATUS.STUDENT.ACTIVE) {
+        students.push({
+          rollNumber: normalizeRollNo(data[i][rollIndex]),
+          fullName: data[i][nameIndex],
+          row: i + 1
+        });
+      }
+    }
+    return students;
+  },
+
+  /**
+   * Fetches a student by normalized roll number.
+   * @param {string} rollNumber 
+   * @returns {Object|null}
+   */
+  getStudentByRollNo: function(rollNumber) {
+    const normalized = normalizeRollNo(rollNumber);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
+    if (!sheet) return null;
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const rollIndex = headers.indexOf('Roll Number');
+    
+    for (let i = 1; i < data.length; i++) {
+      if (normalizeRollNo(data[i][rollIndex]) === normalized) {
+        return {
+          studentId: data[i][headers.indexOf('Student ID')],
+          rollNumber: normalized,
+          fullName: data[i][headers.indexOf('Full Name')],
+          status: data[i][headers.indexOf('Status')],
+          row: i + 1
+        };
+      }
+    }
+    return null;
+  },
+
+  /**
+   * Finds a session by its secure token.
+   * @param {string} token 
+   * @returns {Object|null}
+   */
+  getSessionByToken: function(token) {
+    if (!token) return null;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
+    if (!sheet) return null;
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const tokenIndex = headers.indexOf('Token');
+    
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][tokenIndex] === token) {
+        return {
+          sessionId: data[i][headers.indexOf('Session ID')],
+          date: data[i][headers.indexOf('Session Date')],
+          title: data[i][headers.indexOf('Session Title')],
+          opensAt: new Date(data[i][headers.indexOf('Opens At')]),
+          closesAt: new Date(data[i][headers.indexOf('Closes At')]),
+          status: data[i][headers.indexOf('Status')],
+          token: token,
+          row: i + 1
+        };
+      }
+    }
+    return null;
+  },
+
+  /**
+   * Checks if a specific roll number has already checked in for a session.
+   * @param {string} sessionId 
+   * @param {string} rollNumber 
+   * @returns {Object|null}
+   */
+  getCheckin: function(sessionId, rollNumber) {
+    const normalized = normalizeRollNo(rollNumber);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
+    if (!sheet) return null;
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const sessionIndex = headers.indexOf('Session ID');
+    const rollIndex = headers.indexOf('Roll Number');
+    const timeIndex = headers.indexOf('Timestamp');
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][sessionIndex] === sessionId && normalizeRollNo(data[i][rollIndex]) === normalized) {
+        return {
+          timestamp: data[i][timeIndex]
+        };
+      }
+    }
+    return null;
+  }
+};

@@ -1,0 +1,10 @@
+**/**
+!*.js
+!*.html
+!appsscript.json
+node_modules/
+package.json
+package-lock.json
+README.md
+TESTING.md
+.clasp.json

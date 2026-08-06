@@ -1,0 +1,14 @@
+{
+  "name": "club-attendance-system",
+  "version": "1.0.0",
+  "description": "Zero-cost QR attendance system for Google Sheets and Google Apps Script.",
+  "scripts": {
+    "login": "clasp login",
+    "create": "clasp create --type sheets --title \"Club Attendance System\"",
+    "deploy": "clasp push",
+    "open": "clasp open"
+  },
+  "devDependencies": {
+    "@google/clasp": "^2.4.2"
+  }
+}
