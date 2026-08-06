@@ -2,6 +2,16 @@
  * Configuration and constants for the Attendance System.
  */
 const CONFIG = {
+  ROLL_NUMBER: {
+    PATTERN: /^CB\.SC\.U4([A-Z]{3})(\d{2})(\d{3})$/,
+    EXAMPLE: 'CB.SC.U4CYS25048'
+  },
+  ACCESS_CONTROL: {
+    QR_LIFETIME_SECONDS: 25,
+    QR_REFRESH_SECONDS: 10,
+    GRANT_LIFETIME_SECONDS: 300
+  },
+  DEVICE_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   SHEETS: {
     DASHBOARD: 'Attendance Dashboard',
     STUDENTS: 'Students',
@@ -44,6 +54,52 @@ const CONFIG = {
 function normalizeRollNo(rollNo) {
   if (!rollNo) return '';
   return String(rollNo).trim().toUpperCase();
+}
+
+/**
+ * Checks the institutional roll-number structure.
+ * Format: CB.SC.U4 + department (3 letters) + joining year (2 digits) + roll (3 digits).
+ * @param {string} rollNo
+ * @returns {boolean}
+ */
+function isValidRollNo(rollNo) {
+  return CONFIG.ROLL_NUMBER.PATTERN.test(normalizeRollNo(rollNo));
+}
+
+/**
+ * Normalizes a student's name while preventing spreadsheet formula injection.
+ * @param {string} fullName
+ * @returns {string}
+ */
+function normalizeFullName(fullName) {
+  return String(fullName || '').trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * Validates a name before writing it to Google Sheets.
+ * @param {string} fullName
+ * @returns {boolean}
+ */
+function isValidFullName(fullName) {
+  const normalized = normalizeFullName(fullName);
+  return normalized.length >= 2 &&
+    normalized.length <= 80 &&
+    !/^[=+@-]/.test(normalized) &&
+    !/[\u0000-\u001f\u007f]/.test(normalized);
+}
+
+/**
+ * Hashes a browser identifier before it is stored in the attendance log.
+ * @param {string} deviceId
+ * @returns {string}
+ */
+function hashDeviceId(deviceId) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    deviceId,
+    Utilities.Charset.UTF_8
+  );
+  return digest.map(byte => (byte + 256).toString(16).slice(-2)).join('');
 }
 
 /**

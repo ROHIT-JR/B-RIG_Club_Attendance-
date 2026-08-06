@@ -1,134 +1,182 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <base target="_top">
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, viewport-fit=cover">
-    <meta name="theme-color" content="#000000">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#071716">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
     <?!= include('Styles'); ?>
   </head>
-  <body>
-    
-    <!-- Cinematic Splash Sequence -->
-    <div class="splash-screen">
-      <div class="splash-step splash-step-1">
-         <div class="futuristic-spinner"></div>
-      </div>
-      <div class="splash-step splash-step-2">
-         <img src="https://avatars.githubusercontent.com/u/129193826?s=400&u=1fcd80a193fc7377208d6fb5a02686bcc8754f66&v=4" alt="B-RIG" class="splash-logo">
-         <h1 class="splash-brand">B-RIG</h1>
-      </div>
-      <div class="splash-step splash-step-3">
-         <p class="splash-welcome">Welcome to the club</p>
-      </div>
+  <body
+    data-session-token="<?= sessionToken ?>"
+    data-access-code="<?= accessCode ?>"
+    data-access-expires="<?= accessExpires ?>"
+  >
+    <div class="page-background" aria-hidden="true">
+      <div class="grid-pattern"></div>
+      <div class="glow glow-primary"></div>
+      <div class="glow glow-secondary"></div>
     </div>
 
-    <!-- Ambient Aurora Background -->
-    <div class="app-bg">
-      <div class="aurora aurora-1"></div>
-      <div class="aurora aurora-2"></div>
-      <div class="aurora aurora-3"></div>
-      <div class="noise-overlay"></div>
-    </div>
-
-    <div class="app-container">
-      
-      <!-- Loading State (App level) -->
-      <div id="view-loading" class="view active">
-        <div class="futuristic-spinner" style="margin: 0 auto 24px auto;"></div>
-        <p class="subtitle" style="margin-bottom:0;">Connecting to secure session...</p>
-      </div>
-
-      <!-- Invalid/Expired State -->
-      <div id="view-invalid" class="view hidden">
-        <div class="icon-circle error-bg">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"></path></svg>
-        </div>
-        <h1 class="title">Session Closed</h1>
-        <p class="subtitle" id="invalid-reason">This session is invalid or has expired.</p>
-      </div>
-
-      <!-- Roll Number Input State -->
-      <div id="view-roll-input" class="view hidden">
-        <div class="app-header-logo">
-           <img src="https://avatars.githubusercontent.com/u/129193826?s=400&u=1fcd80a193fc7377208d6fb5a02686bcc8754f66&v=4" alt="B-RIG">
-        </div>
-        <h1 class="title" id="club-title">Check In</h1>
-        <p class="subtitle" id="roll-subtitle">Enter your roll number to mark attendance.</p>
-        
-        <form id="form-roll">
-          <div class="form-group">
-            <label for="rollNumber">Roll Number</label>
-            <input type="text" id="rollNumber" name="rollNumber" placeholder="e.g. CS21045" required autocomplete="off" autocapitalize="characters">
-          </div>
-          <div class="error-text hidden" id="roll-error"></div>
-          <button type="submit" class="btn-primary" id="btn-roll-continue">Continue</button>
-        </form>
-      </div>
-
-      <!-- Confirmation State -->
-      <div id="view-confirm" class="view hidden">
-        <h1 class="title">Is this you?</h1>
-        <p class="subtitle">Please verify your identity.</p>
-        
-        <div class="profile-card">
-          <div class="profile-avatar" id="confirm-avatar"></div>
-          <div class="profile-details">
-            <div class="profile-name" id="confirm-name"></div>
-            <div class="profile-roll" id="confirm-roll"></div>
+    <main class="page-shell">
+      <header class="brand-bar">
+        <div class="brand-identity">
+          <img src="https://avatars.githubusercontent.com/u/129193826?s=160&v=4" alt="B-RIG logo" class="brand-logo">
+          <div>
+            <div class="brand-name">B-RIG</div>
+            <div class="brand-caption">Club Attendance</div>
           </div>
         </div>
-
-        <form id="form-confirm">
-          <div class="error-text hidden" id="confirm-error"></div>
-          <button type="submit" class="btn-primary" id="btn-confirm-attendance">Confirm Attendance</button>
-          <button type="button" class="btn-secondary" id="btn-confirm-back">Not me</button>
-        </form>
-      </div>
-
-      <!-- Registration State -->
-      <div id="view-register" class="view hidden">
-        <h1 class="title">New Registration</h1>
-        <p class="subtitle">We couldn't find this roll number. Please register.</p>
-        
-        <form id="form-register">
-          <div class="form-group">
-            <label for="regRollNumber">Roll Number (Locked)</label>
-            <input type="text" id="regRollNumber" name="regRollNumber" required readonly class="input-locked">
-          </div>
-          <div class="form-group">
-            <label for="regFullName">Full Name</label>
-            <input type="text" id="regFullName" name="regFullName" placeholder="e.g. Jane Doe" required autocomplete="name">
-          </div>
-          <div class="error-text hidden" id="register-error"></div>
-          <button type="submit" class="btn-primary" id="btn-register-attendance">Register & Check In</button>
-          <button type="button" class="btn-secondary" id="btn-register-back">Go back</button>
-        </form>
-      </div>
-
-      <!-- Success State -->
-      <div id="view-success" class="view hidden" style="align-items: center; text-align: center;">
-        <svg class="checkmark-animated" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 52 52">
-          <circle class="checkmark-circle" cx="26" cy="26" r="25" fill="none" />
-          <path class="checkmark-check" fill="none" d="M14.1 27.2l7.1 7.2 16.7-16.8" />
-        </svg>
-        <h1 class="title" style="margin-top: 16px;">Checked In!</h1>
-        <p class="subtitle" id="success-message">Attendance successfully recorded.</p>
-        <div class="app-header-logo" style="margin-top: 24px; flex-direction: column; opacity: 0.8; transform: scale(0.9);">
-           <img src="https://avatars.githubusercontent.com/u/129193826?s=400&u=1fcd80a193fc7377208d6fb5a02686bcc8754f66&v=4" alt="B-RIG">
-           <h2 style="font-size: 16px; letter-spacing: 4px; margin-top: 12px; color: #a1a1aa;">B-RIG</h2>
+        <div class="secure-badge">
+          <span class="status-dot"></span>
+          Secure check-in
         </div>
-      </div>
+      </header>
 
-    </div>
+      <section class="app-card" aria-live="polite">
+        <div id="view-loading" class="view active loading-view">
+          <div class="loader" aria-hidden="true"></div>
+          <h1 class="title">Verifying session</h1>
+          <p class="subtitle">Connecting securely to B-RIG attendance.</p>
+        </div>
 
-    <script>
-      // Injected by Apps Script server
-      const SERVER_SESSION_TOKEN = "<?= sessionToken ?>";
-    </script>
+        <div id="view-invalid" class="view hidden status-view">
+          <div class="status-icon status-icon-error" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M18 6 6 18M6 6l12 12"></path>
+            </svg>
+          </div>
+          <p class="eyebrow">Unable to continue</p>
+          <h1 class="title">Check-in unavailable</h1>
+          <p class="subtitle" id="invalid-reason">This session is invalid or has expired.</p>
+        </div>
+
+        <div id="view-roll-input" class="view hidden">
+          <div class="section-heading">
+            <p class="eyebrow">Attendance portal</p>
+            <h1 class="title" id="club-title">Check in</h1>
+            <p class="subtitle">Enter your university roll number exactly as issued.</p>
+          </div>
+
+          <div class="session-panel">
+            <div class="session-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2Z"></path>
+              </svg>
+            </div>
+            <div>
+              <span class="session-label">Current session</span>
+              <strong id="session-title">Attendance session</strong>
+              <span id="session-date">Loading date...</span>
+            </div>
+          </div>
+
+          <form id="form-roll" novalidate>
+            <div class="form-group">
+              <label for="rollNumber">University roll number</label>
+              <input
+                type="text"
+                id="rollNumber"
+                name="rollNumber"
+                placeholder="CB.SC.U4CYS25048"
+                maxlength="16"
+                required
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                aria-describedby="roll-format roll-error"
+              >
+              <div class="format-guide" id="roll-format">
+                <span><b>CB.SC.U4</b> programme</span>
+                <span><b>CYS</b> department</span>
+                <span><b>25</b> joining year</span>
+                <span><b>048</b> roll</span>
+              </div>
+            </div>
+            <div class="error-text hidden" id="roll-error" role="alert"></div>
+            <button type="submit" class="btn-primary" id="btn-roll-continue">Continue securely</button>
+          </form>
+
+          <div class="policy-note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path>
+              <path d="m9 12 2 2 4-4"></path>
+            </svg>
+            <span>One attendance is permitted per device for each session. A hashed browser identifier is stored to prevent proxy attendance.</span>
+          </div>
+        </div>
+
+        <div id="view-confirm" class="view hidden">
+          <div class="section-heading">
+            <p class="eyebrow">Identity check</p>
+            <h1 class="title">Is this you?</h1>
+            <p class="subtitle">Confirm your details before marking attendance.</p>
+          </div>
+
+          <div class="profile-card">
+            <div class="profile-avatar" id="confirm-avatar"></div>
+            <div class="profile-details">
+              <div class="profile-name" id="confirm-name"></div>
+              <div class="profile-roll" id="confirm-roll"></div>
+            </div>
+            <svg class="verified-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-label="Registered student">
+              <path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z"></path>
+              <path d="m9 12 2 2 4-4"></path>
+            </svg>
+          </div>
+
+          <form id="form-confirm">
+            <div class="error-text hidden" id="confirm-error" role="alert"></div>
+            <button type="submit" class="btn-primary" id="btn-confirm-attendance">Confirm attendance</button>
+            <button type="button" class="btn-secondary" id="btn-confirm-back">This is not me</button>
+          </form>
+        </div>
+
+        <div id="view-register" class="view hidden">
+          <div class="section-heading">
+            <p class="eyebrow">First check-in</p>
+            <h1 class="title">Create your profile</h1>
+            <p class="subtitle">We could not find this roll number. Enter your full name to register.</p>
+          </div>
+
+          <form id="form-register" novalidate>
+            <div class="form-group">
+              <label for="regRollNumber">University roll number</label>
+              <input type="text" id="regRollNumber" name="regRollNumber" readonly class="input-locked">
+            </div>
+            <div class="form-group">
+              <label for="regFullName">Full name</label>
+              <input type="text" id="regFullName" name="regFullName" placeholder="Enter your official name" maxlength="80" required autocomplete="name">
+            </div>
+            <div class="error-text hidden" id="register-error" role="alert"></div>
+            <button type="submit" class="btn-primary" id="btn-register-attendance">Register and check in</button>
+            <button type="button" class="btn-secondary" id="btn-register-back">Use a different roll number</button>
+          </form>
+        </div>
+
+        <div id="view-success" class="view hidden status-view">
+          <div class="success-mark" aria-hidden="true">
+            <svg viewBox="0 0 52 52">
+              <circle cx="26" cy="26" r="24"></circle>
+              <path d="m15 27 7 7 15-16"></path>
+            </svg>
+          </div>
+          <p class="eyebrow success-eyebrow">Attendance recorded</p>
+          <h1 class="title">You're checked in</h1>
+          <p class="subtitle" id="success-message">Your attendance was recorded successfully.</p>
+          <div class="success-footer">
+            <span class="status-dot"></span>
+            You may close this page
+          </div>
+        </div>
+      </section>
+
+      <footer class="page-footer">B-RIG Club &middot; Verified attendance system</footer>
+    </main>
+
     <?!= include('ClientScript'); ?>
   </body>
 </html>

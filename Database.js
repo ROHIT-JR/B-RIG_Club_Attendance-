@@ -145,5 +145,50 @@ const DB = {
       }
     }
     return null;
+  },
+
+  /**
+   * Ensures upgraded workbooks have a column for the hashed browser identifier.
+   */
+  ensureDeviceColumn: function() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
+    if (!sheet) throw new Error('Checkins sheet is missing. Run workbook setup first.');
+
+    const lastColumn = sheet.getLastColumn();
+    const headers = lastColumn > 0
+      ? sheet.getRange(1, 1, 1, lastColumn).getValues()[0]
+      : [];
+    if (!headers.includes('Device ID')) {
+      sheet.getRange(1, lastColumn + 1).setValue('Device ID').setFontWeight('bold');
+    }
+  },
+
+  /**
+   * Finds an attendance record created by the same browser device.
+   * @param {string} sessionId
+   * @param {string} deviceHash
+   * @returns {Object|null}
+   */
+  getCheckinByDevice: function(sessionId, deviceHash) {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
+    if (!sheet || !deviceHash) return null;
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0] || [];
+    const sessionIndex = headers.indexOf('Session ID');
+    const deviceIndex = headers.indexOf('Device ID');
+    if (sessionIndex === -1 || deviceIndex === -1) return null;
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][sessionIndex] === sessionId && data[i][deviceIndex] === deviceHash) {
+        return {
+          timestamp: data[i][headers.indexOf('Timestamp')],
+          rollNumber: data[i][headers.indexOf('Roll Number')]
+        };
+      }
+    }
+    return null;
   }
 };

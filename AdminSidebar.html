@@ -1,82 +1,237 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <base target="_top">
-    <!-- Include QR Code generation library locally (CDN for now, but runs in browser) -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
+      :root {
+        --ink: #102522;
+        --muted: #637570;
+        --primary: #238b7e;
+        --surface: #f4f8f7;
+        --border: #dce8e5;
+      }
+
+      * { box-sizing: border-box; }
+
       body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 100vh;
+        min-height: 100vh;
         margin: 0;
-        background-color: #f8f9fa;
-        color: #333;
+        padding: 22px;
+        background:
+          radial-gradient(circle at top left, rgba(70, 199, 181, 0.14), transparent 35%),
+          var(--surface);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
+
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+
+      .eyebrow {
+        margin: 0 0 4px;
+        color: var(--primary);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 21px;
+        letter-spacing: -0.03em;
+      }
+
+      .live-badge {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 10px;
+        border: 1px solid #cbe7df;
+        border-radius: 999px;
+        background: #eaf8f4;
+        color: #217365;
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .live-badge::before {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #35b98f;
+        box-shadow: 0 0 0 4px rgba(53, 185, 143, 0.12);
+        content: '';
+      }
+
+      .live-badge.error {
+        border-color: #efcec9;
+        background: #fff0ee;
+        color: #9c4038;
+      }
+
+      .live-badge.error::before {
+        background: #d85d52;
+        box-shadow: 0 0 0 4px rgba(216, 93, 82, 0.1);
+      }
+
+      .qr-card {
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: #fff;
+        box-shadow: 0 16px 40px rgba(23, 70, 63, 0.08);
+      }
+
       #qrcode-container {
-        background: white;
-        padding: 24px;
-        border-radius: 16px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        margin-bottom: 20px;
+        display: grid;
+        width: min(260px, 64vw);
+        height: min(260px, 64vw);
+        place-items: center;
+        color: var(--muted);
+        font-size: 12px;
       }
-      .url-display {
-        font-size: 14px;
-        color: #666;
-        word-break: break-all;
+
+      #qrcode-container img,
+      #qrcode-container canvas {
+        display: block;
+        width: min(260px, 64vw) !important;
+        height: min(260px, 64vw) !important;
+      }
+
+      .qr-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 14px;
+        padding: 11px 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .qr-status strong {
+        color: var(--primary);
+        font-weight: 700;
+      }
+
+      .access-note {
+        display: flex;
+        gap: 9px;
+        margin: 13px 0 0;
+        padding: 11px 12px;
+        border: 1px solid #f0dfbf;
+        border-radius: 11px;
+        background: #fff9ed;
+        color: #786442;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .access-note strong { color: #584621; }
+
+      .error-message {
+        color: #a33d35;
+        font-weight: 600;
         text-align: center;
-        max-width: 80%;
-        margin-bottom: 20px;
-      }
-      button {
-        background: #000;
-        color: #fff;
-        border: none;
-        padding: 10px 20px;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: 500;
-      }
-      button:hover {
-        background: #333;
       }
     </style>
   </head>
-  <body>
-    
-    <div id="qrcode-container"></div>
-    <div class="url-display"><?= url ?></div>
-    
-    <button onclick="fullscreen()">View Fullscreen</button>
+  <body data-session-token="<?= sessionToken ?>" data-admin-grant="<?= adminGrant ?>">
+    <header class="header">
+      <div>
+        <p class="eyebrow">B-RIG attendance</p>
+        <h1>Session QR code</h1>
+      </div>
+      <div class="live-badge" id="live-badge">Session live</div>
+    </header>
+
+    <main>
+      <div class="qr-card">
+        <div id="qrcode-container" aria-label="Rotating attendance QR code">Generating secure QR...</div>
+      </div>
+
+      <div class="qr-status">
+        <span>QR automatically refreshes</span>
+        <strong id="expiry-countdown">Securing...</strong>
+      </div>
+
+      <p class="access-note">
+        <span aria-hidden="true">&#9432;</span>
+        <span><strong>Do not photograph or share this QR.</strong> Each code expires quickly. Students with multiple Google accounts should use an Incognito/Private window.</span>
+      </p>
+    </main>
 
     <script>
-      // The URL is injected by Apps Script templating engine
-      const url = "<?= url ?>";
-      
-      // Generate QR Code
-      new QRCode(document.getElementById("qrcode-container"), {
-        text: url,
-        width: 300,
-        height: 300,
-        colorDark : "#0f172a", // Dark navy
-        colorLight : "#ffffff",
-        correctLevel : QRCode.CorrectLevel.H
-      });
+      const sessionToken = document.body.dataset.sessionToken;
+      const adminGrant = document.body.dataset.adminGrant;
+      const qrContainer = document.getElementById('qrcode-container');
+      const countdown = document.getElementById('expiry-countdown');
+      const liveBadge = document.getElementById('live-badge');
+      let expiresAt = 0;
+      let refreshTimer = null;
 
-      function fullscreen() {
-        const el = document.documentElement;
-        if (el.requestFullscreen) {
-          el.requestFullscreen();
-        } else if (el.webkitRequestFullscreen) { /* Safari */
-          el.webkitRequestFullscreen();
-        } else if (el.msRequestFullscreen) { /* IE11 */
-          el.msRequestFullscreen();
-        }
+      function updateCountdown() {
+        const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+        countdown.textContent = seconds > 0 ? `Expires in ${seconds}s` : 'Refreshing...';
       }
+
+      function showQrError(message) {
+        window.clearTimeout(refreshTimer);
+        qrContainer.innerHTML = '';
+        const error = document.createElement('div');
+        error.className = 'error-message';
+        error.textContent = message;
+        qrContainer.appendChild(error);
+        countdown.textContent = 'Unavailable';
+        liveBadge.textContent = 'Session unavailable';
+        liveBadge.classList.add('error');
+      }
+
+      function refreshQr() {
+        google.script.run
+          .withSuccessHandler(data => {
+            if (!data.valid) {
+              showQrError(data.error);
+              return;
+            }
+
+            qrContainer.innerHTML = '';
+            liveBadge.textContent = 'Session live';
+            liveBadge.classList.remove('error');
+            new QRCode(qrContainer, {
+              text: data.url,
+              width: 260,
+              height: 260,
+              colorDark: '#102522',
+              colorLight: '#ffffff',
+              correctLevel: QRCode.CorrectLevel.H
+            });
+            expiresAt = data.expiresAt;
+            updateCountdown();
+            window.clearTimeout(refreshTimer);
+            refreshTimer = window.setTimeout(refreshQr, data.refreshAfterSeconds * 1000);
+          })
+          .withFailureHandler(error => {
+            showQrError(error && error.message ? error.message : 'Could not refresh the QR code.');
+          })
+          .getRotatingQrData(sessionToken, adminGrant);
+      }
+
+      window.setInterval(updateCountdown, 500);
+      refreshQr();
     </script>
   </body>
 </html>

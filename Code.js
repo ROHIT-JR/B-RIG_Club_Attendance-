@@ -14,7 +14,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Reset / Clear All Sessions', 'clearAllData')
     .addSeparator()
-    .addItem('Setup / Initialise Workbook', 'initialiseWorkbook')
+    .addItem('Setup / Initialise Workbook', 'initWorkbook')
     .addToUi();
 }
 
@@ -28,7 +28,7 @@ function initWorkbook() {
     { name: CONFIG.SHEETS.DASHBOARD, headers: ['S.No', 'Name', 'Roll No'] },
     { name: CONFIG.SHEETS.STUDENTS, headers: ['Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At', 'Created By', 'Notes'] },
     { name: CONFIG.SHEETS.SESSIONS, headers: ['Session ID', 'Session Date', 'Session Title', 'Opens At', 'Closes At', 'Status', 'Token', 'Created At', 'Created By'] },
-    { name: CONFIG.SHEETS.CHECKINS, headers: ['Checkin ID', 'Timestamp', 'Session ID', 'Session Date', 'Roll Number', 'Full Name', 'Result', 'Source', 'User Agent'] },
+    { name: CONFIG.SHEETS.CHECKINS, headers: ['Checkin ID', 'Timestamp', 'Session ID', 'Session Date', 'Roll Number', 'Full Name', 'Result', 'Source', 'User Agent', 'Device ID'] },
     { name: CONFIG.SHEETS.SETTINGS, headers: ['Setting', 'Value'] }
   ];
 
@@ -38,10 +38,20 @@ function initWorkbook() {
       sheet = ss.insertSheet(config.name);
     }
     
-    // Set headers if the first row is empty
-    const currentHeaders = sheet.getRange(1, 1, 1, config.headers.length).getValues()[0];
-    if (currentHeaders.join('') === '') {
+    // Create headers for new sheets and append columns introduced by upgrades.
+    const lastColumn = sheet.getLastColumn();
+    const currentHeaders = lastColumn > 0
+      ? sheet.getRange(1, 1, 1, lastColumn).getValues()[0]
+      : [];
+    if (currentHeaders.every(header => header === '')) {
       sheet.getRange(1, 1, 1, config.headers.length).setValues([config.headers]).setFontWeight('bold');
+    } else {
+      const missingHeaders = config.headers.filter(header => !currentHeaders.includes(header));
+      if (missingHeaders.length > 0) {
+        sheet.getRange(1, currentHeaders.length + 1, 1, missingHeaders.length)
+          .setValues([missingHeaders])
+          .setFontWeight('bold');
+      }
     }
   });
 
@@ -207,14 +217,11 @@ function showCurrentSessionQR(providedToken) {
     return;
   }
 
-  const targetAppUrl = `${webAppUrl}?session=${token}`;
-  
-  // Wrap the URL in the GitHub Pages redirect link to bypass Android Google Drive intent!
-  const githubPagesRedirectUrl = "https://ROHIT-JR.github.io/B-RIG_Club_Attendance-/qr.html";
-  const fullUrl = `${githubPagesRedirectUrl}?url=${encodeURIComponent(targetAppUrl)}`;
-  
   const htmlTemplate = HtmlService.createTemplateFromFile('AdminSidebar');
-  htmlTemplate.url = fullUrl;
+  const adminGrant = Utilities.getUuid();
+  CacheService.getScriptCache().put(`admin-qr:${adminGrant}`, String(token), 3600);
+  htmlTemplate.sessionToken = token;
+  htmlTemplate.adminGrant = adminGrant;
   
   const htmlOutput = htmlTemplate.evaluate()
     .setTitle('Attendance QR Code')
@@ -222,6 +229,140 @@ function showCurrentSessionQR(providedToken) {
     .setHeight(600);
 
   SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Scan to Check-in');
+}
+
+/**
+ * Returns a short-lived signed URL for the live admin QR display.
+ * @param {string} token
+ * @param {string} adminGrant
+ * @returns {Object}
+ */
+function getRotatingQrData(token, adminGrant) {
+  const grantedToken = adminGrant
+    ? CacheService.getScriptCache().get(`admin-qr:${adminGrant}`)
+    : null;
+  if (!grantedToken || !safeStringEqual_(String(grantedToken), String(token))) {
+    return { valid: false, error: 'This admin QR display is not authorized.' };
+  }
+
+  const session = DB.getSessionByToken(token);
+  const now = new Date();
+  if (!session || session.status !== CONFIG.STATUS.SESSION.OPEN || now < session.opensAt || now > session.closesAt) {
+    return { valid: false, error: 'This attendance session is no longer open.' };
+  }
+
+  const webAppUrl = getSetting('Public Web App URL');
+  if (!webAppUrl || webAppUrl === CONFIG.DEFAULT_SETTINGS['Public Web App URL']) {
+    return { valid: false, error: 'The Public Web App URL is not configured.' };
+  }
+
+  const expiresAt = Date.now() + (CONFIG.ACCESS_CONTROL.QR_LIFETIME_SECONDS * 1000);
+  const signature = signQrAccess_(token, expiresAt);
+  const separator = webAppUrl.includes('?') ? '&' : '?';
+  const url = `${webAppUrl}${separator}session=${encodeURIComponent(token)}` +
+    `&access=${encodeURIComponent(signature)}&expires=${expiresAt}`;
+
+  return {
+    valid: true,
+    url: url,
+    expiresAt: expiresAt,
+    refreshAfterSeconds: CONFIG.ACCESS_CONTROL.QR_REFRESH_SECONDS
+  };
+}
+
+/**
+ * Gets or creates the server-only secret used to sign QR access links.
+ * @returns {string}
+ */
+function getQrSigningSecret_() {
+  const properties = PropertiesService.getScriptProperties();
+  let secret = properties.getProperty('QR_SIGNING_SECRET');
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid();
+    properties.setProperty('QR_SIGNING_SECRET', secret);
+  }
+  return secret;
+}
+
+/**
+ * Signs a session token and expiration timestamp.
+ * @param {string} token
+ * @param {number} expiresAt
+ * @returns {string}
+ */
+function signQrAccess_(token, expiresAt) {
+  const bytes = Utilities.computeHmacSha256Signature(
+    `${token}:${expiresAt}`,
+    getQrSigningSecret_(),
+    Utilities.Charset.UTF_8
+  );
+  return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, '');
+}
+
+/**
+ * Validates a signed QR link without trusting client time.
+ * @param {string} token
+ * @param {string} signature
+ * @param {number|string} expiresAt
+ * @returns {boolean}
+ */
+function isValidQrAccess_(token, signature, expiresAt) {
+  const expiration = Number(expiresAt);
+  const maxFuture = (CONFIG.ACCESS_CONTROL.QR_LIFETIME_SECONDS + 5) * 1000;
+  if (!token || !signature || !Number.isFinite(expiration)) return false;
+  if (expiration < Date.now() || expiration - Date.now() > maxFuture) return false;
+  return safeStringEqual_(String(signature), signQrAccess_(token, expiration));
+}
+
+/**
+ * Compares two strings without exiting on the first different character.
+ * @param {string} left
+ * @param {string} right
+ * @returns {boolean}
+ */
+function safeStringEqual_(left, right) {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let i = 0; i < left.length; i++) {
+    difference |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  }
+  return difference === 0;
+}
+
+/**
+ * Issues a temporary grant bound to one session and browser device.
+ * @param {string} sessionToken
+ * @param {string} deviceId
+ * @returns {string}
+ */
+function issueAccessGrant_(sessionToken, deviceId) {
+  const grant = Utilities.getUuid();
+  CacheService.getScriptCache().put(
+    `access-grant:${grant}`,
+    JSON.stringify({ sessionToken: sessionToken, deviceHash: hashDeviceId(deviceId) }),
+    CONFIG.ACCESS_CONTROL.GRANT_LIFETIME_SECONDS
+  );
+  return grant;
+}
+
+/**
+ * Checks that a temporary grant belongs to the current session and browser.
+ * @param {string} grant
+ * @param {string} sessionToken
+ * @param {string} deviceId
+ * @returns {boolean}
+ */
+function isValidAccessGrant_(grant, sessionToken, deviceId) {
+  if (!grant || !sessionToken || !deviceId || !CONFIG.DEVICE_ID_PATTERN.test(String(deviceId))) return false;
+  const cached = CacheService.getScriptCache().get(`access-grant:${grant}`);
+  if (!cached) return false;
+  try {
+    const data = JSON.parse(cached);
+    return safeStringEqual_(String(data.sessionToken), String(sessionToken)) &&
+      safeStringEqual_(String(data.deviceHash), hashDeviceId(String(deviceId)));
+  } catch (error) {
+    return false;
+  }
 }
 
 /**
@@ -252,6 +393,8 @@ function closeCurrentSession() {
 function doGet(e) {
   const template = HtmlService.createTemplateFromFile('Index');
   template.sessionToken = (e && e.parameter && e.parameter.session) ? e.parameter.session : '';
+  template.accessCode = (e && e.parameter && e.parameter.access) ? e.parameter.access : '';
+  template.accessExpires = (e && e.parameter && e.parameter.expires) ? e.parameter.expires : '';
   
   return template
     .evaluate()
@@ -269,8 +412,14 @@ function include(filename) {
 /**
  * Called by frontend to get session details by token.
  */
-function getClientSessionDetails(token) {
+function getClientSessionDetails(token, accessCode, accessExpires, deviceId) {
   if (!token) return { valid: false, reason: 'No session provided.' };
+  if (!deviceId || !CONFIG.DEVICE_ID_PATTERN.test(String(deviceId))) {
+    return { valid: false, reason: 'Browser storage is required for secure attendance.' };
+  }
+  if (!isValidQrAccess_(token, accessCode, accessExpires)) {
+    return { valid: false, reason: 'This QR link has expired. Scan the live QR code again.' };
+  }
   
   const session = DB.getSessionByToken(token);
   if (!session) return { valid: false, reason: 'Invalid session.' };
@@ -284,28 +433,69 @@ function getClientSessionDetails(token) {
   if (now > session.closesAt) return { valid: false, reason: 'Session has expired.' };
 
   const sessionDateStr = Utilities.formatDate(session.date, getSetting('Time zone') || 'Asia/Kolkata', 'dd-MM-yyyy');
-  return { valid: true, title: session.title, date: sessionDateStr, clubName: getSetting('Club Name') };
+  return {
+    valid: true,
+    title: session.title,
+    date: sessionDateStr,
+    clubName: getSetting('Club Name'),
+    accessGrant: issueAccessGrant_(token, String(deviceId))
+  };
 }
 
 /**
  * Called by frontend to check if a roll number exists.
  */
-function validateRollNo(rollNumber) {
-  const student = DB.getStudentByRollNo(rollNumber);
+function validateRollNo(rollNumber, sessionToken, deviceId, accessGrant) {
+  if (!isValidAccessGrant_(accessGrant, sessionToken, deviceId)) {
+    return { valid: false, error: 'Secure access expired. Scan the live QR code again.' };
+  }
+  const session = DB.getSessionByToken(sessionToken);
+  const now = new Date();
+  if (!session || session.status !== CONFIG.STATUS.SESSION.OPEN || now < session.opensAt || now > session.closesAt) {
+    return { valid: false, error: 'This attendance session is no longer open.' };
+  }
+  const normalizedRollNo = normalizeRollNo(rollNumber);
+  if (!isValidRollNo(normalizedRollNo)) {
+    return {
+      valid: false,
+      error: `Use the format ${CONFIG.ROLL_NUMBER.EXAMPLE}: department (3 letters), joining year (2 digits), and roll number (3 digits).`
+    };
+  }
+
+  const student = DB.getStudentByRollNo(normalizedRollNo);
   const activeStatus = CONFIG.STATUS.STUDENT.ACTIVE.toUpperCase();
   if (student && (!student.status || String(student.status).trim().toUpperCase() === activeStatus)) {
-    return { exists: true, fullName: student.fullName, rollNumber: student.rollNumber };
+    return { valid: true, exists: true, fullName: student.fullName, rollNumber: student.rollNumber };
   }
-  return { exists: false };
+  return { valid: true, exists: false, rollNumber: normalizedRollNo };
 }
 
 /**
  * Securely records attendance.
  */
-function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration) {
+function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration, deviceId, userAgent, accessGrant) {
   if (!sessionToken || !rollNumber) {
     return { success: false, error: 'Missing required information.' };
   }
+  if (!isValidAccessGrant_(accessGrant, sessionToken, deviceId)) {
+    return { success: false, error: 'Secure access expired. Scan the live QR code again.' };
+  }
+
+  const normalizedRollNo = normalizeRollNo(rollNumber);
+  if (!isValidRollNo(normalizedRollNo)) {
+    return { success: false, error: `Invalid roll number. Use ${CONFIG.ROLL_NUMBER.EXAMPLE}.` };
+  }
+  if (!deviceId || !CONFIG.DEVICE_ID_PATTERN.test(String(deviceId))) {
+    return { success: false, error: 'This browser could not be verified. Enable browser storage and try again.' };
+  }
+
+  fullName = normalizeFullName(fullName);
+  if (isNewRegistration && !isValidFullName(fullName)) {
+    return { success: false, error: 'Enter a valid full name between 2 and 80 characters.' };
+  }
+
+  const deviceHash = hashDeviceId(String(deviceId));
+  const safeUserAgent = String(userAgent || '').slice(0, 250);
 
   return DB.withLock(() => {
     // 1. Re-validate session
@@ -314,16 +504,28 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration)
       return { success: false, error: 'Session is invalid or closed.' };
     }
     const now = new Date();
+    if (now < session.opensAt) {
+      return { success: false, error: 'Session has not opened yet.' };
+    }
     if (now > session.closesAt) {
       return { success: false, error: 'Session has expired.' };
     }
 
-    const normalizedRollNo = normalizeRollNo(rollNumber);
+    DB.ensureDeviceColumn();
 
-    // 2. Check for duplicate
+    // 2. Prevent repeat attendance by student or browser device.
     const existingCheckin = DB.getCheckin(session.sessionId, normalizedRollNo);
     if (existingCheckin) {
       return { success: false, duplicate: true, time: existingCheckin.timestamp };
+    }
+
+    const deviceCheckin = DB.getCheckinByDevice(session.sessionId, deviceHash);
+    if (deviceCheckin) {
+      return {
+        success: false,
+        deviceBlocked: true,
+        error: 'This device has already submitted attendance for this session. Only one attendance is allowed per device.'
+      };
     }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -424,7 +626,8 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration)
     // 5. Log Checkin
     const checkinId = 'CHK-' + now.getTime();
     checkinsSheet.appendRow([
-      checkinId, now, session.sessionId, session.date, normalizedRollNo, fullName, 'Present', 'QR Web App', ''
+      checkinId, now, session.sessionId, session.date, normalizedRollNo, fullName,
+      'Present', 'QR Web App', safeUserAgent, deviceHash
     ]);
 
     return { success: true };
