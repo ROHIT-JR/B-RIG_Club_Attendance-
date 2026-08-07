@@ -473,7 +473,7 @@ function doPost(e) {
  */
 function verifyVercelApiSecret_(providedSecret) {
   const configuredSecret = PropertiesService.getScriptProperties().getProperty('VERCEL_API_SECRET');
-  if (!configuredSecret || typeof providedSecret !== 'string') return false;
+  if (!configuredSecret || configuredSecret.length < 32 || typeof providedSecret !== 'string') return false;
   return safeStringEqual_(configuredSecret, providedSecret);
 }
 

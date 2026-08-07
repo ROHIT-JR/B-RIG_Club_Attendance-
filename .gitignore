@@ -1,3 +1,6 @@
 node_modules/
 .clasp.json
 graphify-out/
+.env
+.env.*
+!.env.example
