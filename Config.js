@@ -10,7 +10,8 @@ const CONFIG = {
     QR_LIFETIME_SECONDS: 25,
     QR_REFRESH_SECONDS: 10,
     GRANT_LIFETIME_SECONDS: 300,
-    GOOGLE_ACCOUNT_SLOT: 0
+    GOOGLE_ACCOUNT_SLOT: 0,
+    QR_REDIRECT_URL: 'https://rohit-jr.github.io/B-RIG_Club_Attendance-/qr.html'
   },
   DEVICE_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   CHECKIN_HEADERS: [

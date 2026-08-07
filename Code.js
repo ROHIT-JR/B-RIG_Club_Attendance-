@@ -262,9 +262,10 @@ function getRotatingQrData(token, adminGrant) {
   const expiresAt = Date.now() + (CONFIG.ACCESS_CONTROL.QR_LIFETIME_SECONDS * 1000);
   const signature = signQrAccess_(token, expiresAt);
   const baseWebAppUrl = webAppUrl.split('?')[0].replace(/\/$/, '');
-  const url = `${baseWebAppUrl}?authuser=${CONFIG.ACCESS_CONTROL.GOOGLE_ACCOUNT_SLOT}` +
+  const targetUrl = `${baseWebAppUrl}?authuser=${CONFIG.ACCESS_CONTROL.GOOGLE_ACCOUNT_SLOT}` +
     `&session=${encodeURIComponent(token)}` +
     `&access=${encodeURIComponent(signature)}&expires=${expiresAt}`;
+  const url = `${CONFIG.ACCESS_CONTROL.QR_REDIRECT_URL}?url=${encodeURIComponent(targetUrl)}`;
 
   return {
     valid: true,
