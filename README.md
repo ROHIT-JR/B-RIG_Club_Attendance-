@@ -1,295 +1,211 @@
 # B-RIG Club Attendance System
 
-A serverless QR-based attendance system for clubs and student organizations. The application runs on Google Apps Script, stores its data in Google Sheets, and provides a responsive browser-based check-in experience without requiring a separate server or database.
+B-RIG is a QR attendance system with a student frontend on Vercel, a private server-to-server proxy, Google Apps Script business logic, and Google Sheets storage. Students open only the Vercel or custom student domain. They do not visit an Apps Script URL, select a Google account, or sign in to Google.
 
 ## Features
 
-- Secure, session-specific QR codes for attendance
-- Automatically rotating QR links with signed short-lived access
-- Configurable attendance windows
-- New-student registration during check-in
-- Duplicate, expired, invalid, and closed-session protection
-- Institutional roll-number validation for programme, department, joining year, and roll sequence
-- One attendance submission per browser device per session to discourage proxy attendance
-- Live attendance records in Google Sheets
-- Automatic present, absent, and pre-registration markers
-- Concurrency protection for simultaneous check-ins
-- Responsive interface with animated success feedback
-- Administrative controls from a custom Google Sheets menu
+- Signed QR links that expire after 25 seconds and rotate about every 10 seconds
+- Five-minute access grants bound to one browser identifier and one session
+- Existing-student lookup and optional first-time registration
+- Institutional roll-number validation using `CB.SC.U4CYS25048` format
+- Duplicate roll and one-attendance-per-browser enforcement under `LockService`
+- Immediate Google Sheets check-in logging and dashboard updates
+- Administrator session controls in the Google Sheets menu
+- Mobile-first student UI with retry states and reduced-motion support
+- Same-origin Vercel API with payload validation, secret redaction, timeouts, and rate limiting
+
+## Architecture
+
+```text
+Administrator in Google Sheets
+  -> Apps Script AdminSidebar.html
+  -> rotating signed QR
+
+Student browser
+  -> https://attendance.example.org/?session=...&access=...&expires=...
+  -> POST /api/attendance on the same Vercel origin
+  -> Vercel adds APPS_SCRIPT_API_SECRET on the server
+  -> Apps Script /exec doPost(e)
+  -> Google Sheets
+```
+
+The browser bundle never contains the Apps Script URL or API secret. Apps Script accepts only `sessionDetails`, `validateRoll`, and `submitAttendance` requests carrying the server-only secret. The public Apps Script `doGet()` returns status JSON only; it does not host the student interface.
 
 ## Technology
 
 | Component | Technology |
 | --- | --- |
-| Frontend | HTML, CSS, and vanilla JavaScript |
-| Backend | Google Apps Script (V8 runtime) |
-| Database | Google Sheets |
-| Deployment | Google Clasp CLI |
-| Hosting | Google Apps Script Web App |
-
-## How It Works
-
-1. An administrator creates an attendance session from the Google Sheet.
-2. The system generates a unique session token and QR code.
-3. Students scan the QR code and enter their roll number.
-4. The system validates the session, roll-number structure, student, and browser device before accepting attendance.
-5. Attendance is written to the dashboard and check-in log immediately.
+| Student frontend | Static HTML, CSS, and vanilla JavaScript on Vercel |
+| Same-origin API | Vercel Node.js serverless function |
+| Business logic | Google Apps Script V8 runtime |
+| Data store | Google Sheets |
+| Apps Script deployment | Clasp and Apps Script web app deployment |
 
 ## Requirements
 
-Before installation, you need:
+- Node.js 20 or newer with `npm`
+- Git
+- A Google account that can own a Sheet and deploy an anonymous Apps Script web app
+- A Vercel account and project
+- A modern student browser with persistent site storage enabled
 
-- A Google account with permission to create Google Sheets and Apps Script projects
-- [Node.js](https://nodejs.org/) 18 or newer, including `npm`
-- [Git](https://git-scm.com/downloads)
-- A modern web browser
+Some managed Google Workspace domains prohibit anonymous Apps Script deployments. The administrator must use an account that permits **Who has access: Anyone**. This Google restriction affects the Vercel-to-Apps-Script backend connection, not student Google accounts.
 
-The repository includes Clasp as a development dependency, so a global Clasp installation is not required.
+## Install
 
-> **Important:** Google does not support simultaneous multi-login for Apps Script web apps. Use a dedicated browser profile for administration and sign in to only one Google account in that profile. The account used for Google Sheets, Apps Script, and `npx clasp login` must be the same administrator account. Students who have multiple Google accounts signed in should open the QR link in an incognito/private window or sign out of their other accounts first.
-
-## Windows Installation
-
-Use **PowerShell** for the commands in this section.
-
-### 1. Install and verify the required tools
-
-Install the current Node.js LTS release from [nodejs.org](https://nodejs.org/) and Git from [git-scm.com](https://git-scm.com/download/win). Accept the default installer options, close PowerShell, reopen it, and verify both tools:
-
-```powershell
-node --version
-npm --version
-git --version
-```
-
-Each command should print a version number. If a command is not recognized, restart Windows or add the application to your `PATH`.
-
-### 2. Download the project and install dependencies
-
-Choose a folder for the project, then run:
-
-```powershell
-git clone https://github.com/ROHIT-JR/B-RIG_Club_Attendance-.git B-RIG_Club_Attendance
-Set-Location B-RIG_Club_Attendance
-npm ci
-```
-
-`npm ci` installs the exact Clasp version recorded in `package-lock.json`.
-
-### 3. Create and connect the Google Apps Script project
-
-Open [Google Sheets](https://sheets.google.com), create a blank spreadsheet, and give it a recognizable name such as **B-RIG Club Attendance**. In the spreadsheet, select **Extensions > Apps Script**.
-
-In the Apps Script editor, select **Project Settings** from the left sidebar and copy the **Script ID**. Return to PowerShell and create the local Clasp configuration, replacing `PASTE_YOUR_SCRIPT_ID_HERE` with the copied value:
-
-```powershell
-'{"scriptId":"PASTE_YOUR_SCRIPT_ID_HERE","rootDir":"."}' | Set-Content -Encoding ASCII .clasp.json
-```
-
-Do not share or commit `.clasp.json`; it identifies your Apps Script project and is already excluded by `.gitignore`.
-
-### 4. Sign in, upload the code, and initialize the workbook
-
-Run the following commands:
-
-```powershell
-npx clasp login
-npx clasp push --force
-```
-
-Sign in with the same Google account that owns the spreadsheet and approve the requested access. After the upload finishes, return to the spreadsheet and refresh the page. Open **Club Attendance > Setup / Initialise Workbook** and approve the Google authorization prompt if it appears.
-
-Use a browser profile containing only this administrator account. If Google displays an account-selection or authorization error, sign out of the other accounts before continuing.
-
-The setup command creates and configures `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings`. Do not rename these sheets.
-
-### 5. Deploy, configure, and test the web app
-
-In the Apps Script editor, select **Deploy > New deployment**, choose **Web app**, and use these settings:
-
-- **Execute as:** Me
-- **Who has access:** Anyone
-
-Select **Deploy**, complete authorization, and copy the Web App URL ending in `/exec`. In the spreadsheet, open the `Settings` sheet and replace `Paste your web app URL here` beside `Public Web App URL` with that URL. Update `Club Name`, `Time zone`, and other settings if needed.
-
-Refresh the spreadsheet, select **Club Attendance > Create New Attendance Session**, enter a title and duration, and scan the generated QR code to confirm that the check-in page opens.
-
-## macOS Installation
-
-Use **Terminal** for the commands in this section.
-
-### 1. Install and verify the required tools
-
-Install Apple's command-line tools, which include Git:
-
-```bash
-xcode-select --install
-```
-
-Install the current Node.js LTS release from [nodejs.org](https://nodejs.org/). Open a new Terminal window after installation, then verify the tools:
-
-```bash
-node --version
-npm --version
-git --version
-```
-
-Each command should print a version number.
-
-### 2. Download the project and install dependencies
-
-Run:
+### 1. Get the project
 
 ```bash
 git clone https://github.com/ROHIT-JR/B-RIG_Club_Attendance-.git B-RIG_Club_Attendance
 cd B-RIG_Club_Attendance
 npm ci
+npm test
 ```
 
-`npm ci` installs the exact Clasp version recorded in `package-lock.json`.
+`npm test` runs the Apps Script logic, architecture-boundary, and Vercel proxy tests.
 
-### 3. Create and connect the Google Apps Script project
+### 2. Connect a Google Sheet
 
-Open [Google Sheets](https://sheets.google.com), create a blank spreadsheet, and name it **B-RIG Club Attendance**. Select **Extensions > Apps Script**, open **Project Settings** from the Apps Script sidebar, and copy the **Script ID**.
+1. Create a blank Google Sheet.
+2. Open **Extensions > Apps Script**.
+3. Open **Project Settings** and copy the Script ID.
+4. Enable the Google Apps Script API in the administrator account's Apps Script user settings.
+5. Create an untracked `.clasp.json` in the repository root:
 
-Return to Terminal and create the Clasp configuration, replacing `PASTE_YOUR_SCRIPT_ID_HERE` with the copied value:
-
-```bash
-printf '%s\n' '{"scriptId":"PASTE_YOUR_SCRIPT_ID_HERE","rootDir":"."}' > .clasp.json
+```json
+{"scriptId":"PASTE_YOUR_SCRIPT_ID_HERE","rootDir":"."}
 ```
 
-Do not share or commit `.clasp.json`; it identifies your Apps Script project and is already excluded by `.gitignore`.
-
-### 4. Sign in, upload the code, and initialize the workbook
-
-Run:
-
-```bash
-npx clasp login
-npx clasp push --force
-```
-
-Sign in with the Google account that owns the spreadsheet and approve access. Return to the spreadsheet after the upload completes and refresh the page. Select **Club Attendance > Setup / Initialise Workbook** and approve the Google authorization prompt if requested.
-
-Use a browser profile containing only this administrator account. If Google displays an account-selection or authorization error, sign out of the other accounts before continuing.
-
-The setup command creates and configures `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings`. Do not rename these sheets.
-
-### 5. Deploy, configure, and test the web app
-
-In the Apps Script editor, select **Deploy > New deployment**, choose **Web app**, and configure:
-
-- **Execute as:** Me
-- **Who has access:** Anyone
-
-Select **Deploy**, authorize the application, and copy the Web App URL ending in `/exec`. In the spreadsheet's `Settings` sheet, replace `Paste your web app URL here` beside `Public Web App URL` with the copied URL. Adjust `Club Name`, `Time zone`, and the remaining settings when required.
-
-Refresh the spreadsheet, select **Club Attendance > Create New Attendance Session**, provide a title and duration, and scan the QR code to verify the public check-in page.
-
-## Linux Installation
-
-Use your distribution's terminal for the commands in this section. The examples below cover Ubuntu/Debian, Fedora, and Arch Linux.
-
-### 1. Install and verify the required tools
-
-Install Node.js, npm, and Git with the command for your distribution:
-
-**Ubuntu or Debian:**
-
-```bash
-sudo apt update
-sudo apt install -y nodejs npm git
-```
-
-**Fedora:**
-
-```bash
-sudo dnf install -y nodejs npm git
-```
-
-**Arch Linux:**
-
-```bash
-sudo pacman -S --needed nodejs npm git
-```
-
-Verify that Node.js 18 or newer is installed:
-
-```bash
-node --version
-npm --version
-git --version
-```
-
-If your distribution provides an older Node.js release, install the current LTS release using the instructions at [nodejs.org](https://nodejs.org/).
-
-### 2. Download the project and install dependencies
-
-Run:
-
-```bash
-git clone https://github.com/ROHIT-JR/B-RIG_Club_Attendance-.git B-RIG_Club_Attendance
-cd B-RIG_Club_Attendance
-npm ci
-```
-
-`npm ci` installs the exact Clasp version recorded in `package-lock.json`.
-
-### 3. Create and connect the Google Apps Script project
-
-Open [Google Sheets](https://sheets.google.com), create a blank spreadsheet, and name it **B-RIG Club Attendance**. Select **Extensions > Apps Script**, open **Project Settings** from the left sidebar, and copy the **Script ID**.
-
-Return to the terminal and create the Clasp configuration, replacing `PASTE_YOUR_SCRIPT_ID_HERE` with the copied value:
-
-```bash
-printf '%s\n' '{"scriptId":"PASTE_YOUR_SCRIPT_ID_HERE","rootDir":"."}' > .clasp.json
-```
-
-Do not share or commit `.clasp.json`; it identifies your Apps Script project and is already excluded by `.gitignore`.
-
-### 4. Sign in, upload the code, and initialize the workbook
-
-Run:
+6. Authenticate and upload the Apps Script files:
 
 ```bash
 npx clasp login
 npx clasp push --force
 ```
 
-Clasp opens a browser for Google sign-in. If no browser opens, copy the URL printed in the terminal into a browser manually. Use the account that owns the spreadsheet and approve access.
+7. Refresh the Sheet.
+8. Select **Club Attendance > Setup / Initialise Workbook**.
 
-Use a browser profile containing only this administrator account. If Google displays an account-selection or authorization error, sign out of the other accounts before continuing.
+Initialization creates or upgrades these sheets without deleting existing settings or attendance records. It can rewrite formula-like historical `User Agent` cells as safe text:
 
-After the upload completes, return to the spreadsheet and refresh it. Select **Club Attendance > Setup / Initialise Workbook** and approve the Google authorization prompt if requested. The command creates and configures `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings`. Do not rename these sheets.
+- `Attendance Dashboard`
+- `Students`
+- `Sessions`
+- `Checkins`
+- `Settings`
 
-### 5. Deploy, configure, and test the web app
+Do not rename required sheets or standard headers. `.clasp.json` identifies the Apps Script project and must not be committed.
 
-In the Apps Script editor, select **Deploy > New deployment**, choose **Web app**, and configure:
+### 3. Create the shared server secret
 
-- **Execute as:** Me
-- **Who has access:** Anyone
+Generate a random secret of at least 32 characters. This cross-platform Node.js command creates a 64-character value:
 
-Select **Deploy**, authorize the application, and copy the Web App URL ending in `/exec`. In the spreadsheet's `Settings` sheet, replace `Paste your web app URL here` beside `Public Web App URL` with the copied URL. Adjust `Club Name`, `Time zone`, and other settings as needed.
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
 
-Refresh the spreadsheet, select **Club Attendance > Create New Attendance Session**, provide a title and duration, and scan the QR code to verify the check-in page.
+Store the same value in both server environments:
+
+1. In Apps Script, open **Project Settings > Script Properties**.
+2. Add a property named `VERCEL_API_SECRET` with the generated value.
+3. Keep the value available temporarily for the Vercel configuration step.
+
+Do not put the value in `.env.example`, source files, browser code, URLs, a Sheet cell, screenshots, issue reports, or Git history.
+
+### 4. Deploy Apps Script as the backend
+
+1. In Apps Script, select **Deploy > New deployment**.
+2. Choose **Web app**.
+3. Set **Execute as** to **Me**.
+4. Set **Who has access** to **Anyone**.
+5. Deploy and complete administrator authorization.
+6. Copy the production URL matching `https://script.google.com/macros/s/DEPLOYMENT_ID/exec`.
+
+The `/exec` URL is a backend credential-like configuration value. Give it only to administrators and Vercel. Never put it in the student URL or the `Student Web App URL` Sheet setting.
+
+Opening the `/exec` URL directly should return JSON similar to:
+
+```json
+{"ok":true,"service":"B-RIG Attendance API","studentFrontend":"external"}
+```
+
+### 5. Deploy the student app on Vercel
+
+Import the repository into Vercel and configure:
+
+| Vercel option | Value |
+| --- | --- |
+| Framework preset | Other |
+| Root Directory | `vercel` |
+| Build command | Leave empty |
+| Output directory | Leave empty |
+
+Add these server-side environment variables for Production:
+
+| Variable | Value |
+| --- | --- |
+| `APPS_SCRIPT_URL` | The Apps Script production `/exec` URL |
+| `APPS_SCRIPT_API_SECRET` | The exact value stored as `VERCEL_API_SECRET` |
+
+Add the variables to Preview too only if preview deployments will be used for attendance testing. Redeploy after adding or changing environment variables.
+
+The stable student address must be a root HTTPS origin, for example:
+
+```text
+https://b-rig-attendance.vercel.app
+https://attendance.example.edu
+```
+
+Paths, query strings, fragments, HTTP URLs, numeric hosts, Google-hosted URLs, and GitHub Pages hosts are not accepted for QR generation. A root preview origin can pass format validation but is not stable; do not configure a deployment-specific preview URL. A custom domain is supported when it points to the Vercel project root.
+
+The function includes warm-instance request limits. For distributed production enforcement, also configure a Vercel Firewall rate-limit rule for POST requests to `/api/attendance`. Choose a limit that accommodates many students behind the same campus NAT address; monitor normal meeting traffic before tightening it.
+
+### 6. Connect QR generation to Vercel
+
+In the Sheet's `Settings` tab, set `Student Web App URL` to the stable Vercel or custom root origin. Do not paste the Apps Script `/exec` URL.
+
+Refresh the Sheet and select **Club Attendance > Create New Attendance Session**. Decode or scan the displayed QR and confirm:
+
+- The hostname is the configured Vercel or custom hostname.
+- The only attendance parameters are `session`, `access`, and `expires`.
+- No URL includes `script.google.com`, `authuser`, GitHub Pages, or `qr.html`.
+- A student with multiple Google accounts signed in reaches the student form without a Google page.
+
+Complete the production checklist in [`TESTING.md`](TESTING.md) before using the system at a meeting.
 
 ## Configuration
 
-The `Settings` sheet is created automatically during initialization.
+### Sheet settings
 
 | Setting | Purpose | Default |
 | --- | --- | --- |
-| `Club Name` | Name displayed on the check-in page | `Student Club` |
-| `Public Web App URL` | Deployed `/exec` URL used to build QR links | Must be supplied |
+| `Club Name` | Name shown in the student interface | `Student Club` |
+| `Student Web App URL` | Trusted root HTTPS student frontend origin | Must be configured |
 | `New registrations require approval` | Creates new students as Pending when `TRUE` | `FALSE` |
-| `Default attendance window in minutes` | Default duration of a new session | `60` |
-| `Time zone` | Time zone used for session dates | `Asia/Kolkata` |
+| `Default attendance window in minutes` | Default new-session duration | `60` |
+| `Time zone` | IANA time zone used for display and dashboard dates | `Asia/Kolkata` |
+| `Version` | Installed workbook schema version | `2.0.0` |
 
-Use a valid [IANA time zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones), such as `Asia/Kolkata`, `Europe/London`, or `America/New_York`.
+`Public Web App URL` is a migration-only fallback for an older installation. An old Apps Script, GitHub Pages, or path-based value is rejected. Configure `Student Web App URL` and remove operational dependence on the legacy row.
 
-## Roll Number Format
+Only trusted administrators should be able to edit `Settings`. QR generation intentionally trusts the configured custom student origin after validating that it is a root HTTPS domain and not Google-hosted.
 
-Only institutional roll numbers matching this structure are accepted:
+The configured `Time zone`, `appsscript.json` `timeZone`, and the Google Sheet time zone under **File > Settings** must match. The repository defaults to `Asia/Kolkata`. To use another zone, update all three locations, upload the manifest, and publish a new Apps Script version before creating sessions.
+
+When registration approval is enabled, the first check-in is recorded and the new `Students` row is marked Pending. An administrator approves future check-ins by changing that row's `Status` to `Active`. Until then, later scans show an approval-pending message.
+
+### Server settings
+
+| Location | Name | Visibility |
+| --- | --- | --- |
+| Apps Script Script Properties | `VERCEL_API_SECRET` | Server only |
+| Vercel environment | `APPS_SCRIPT_URL` | Server only |
+| Vercel environment | `APPS_SCRIPT_API_SECRET` | Server only |
+| Apps Script Script Properties | `QR_SIGNING_SECRET` | Generated automatically, server only |
+
+## Roll Numbers
+
+Accepted roll numbers use this structure:
 
 ```text
 CB.SC.U4CYS25048
@@ -300,175 +216,163 @@ Programme Dept Year Roll
 | Segment | Rule | Example |
 | --- | --- | --- |
 | Programme | Fixed prefix | `CB.SC.U4` |
-| Department | Exactly three letters | `CYS`, `CSE`, `ECE` |
+| Department | Exactly three letters | `CYS` |
 | Joining year | Exactly two digits | `25` |
 | Roll sequence | Exactly three digits | `048` |
 
-Input is normalized to uppercase. For example, `cb.sc.u4cys25048` becomes `CB.SC.U4CYS25048`. Values such as `CS21045`, `CB.SC.U4CYS2548`, or department codes that are not exactly three letters are rejected by both the browser and server.
+Input is normalized to uppercase and validated in both the browser and Apps Script.
 
-## Device-Based Proxy Protection
+## Security Model
 
-On first use, the check-in page creates a random identifier in browser storage. The server hashes that identifier and records only the hash in the `Device ID` column of the `Checkins` sheet. During a session:
+### QR and grants
 
-- The same roll number cannot check in twice, even from another device.
-- The same browser device cannot submit attendance for a second roll number.
-- Device checks and attendance writes run under the same server lock to prevent simultaneous requests bypassing the restriction.
+- The admin dialog receives a temporary admin grant and renews it while the dialog remains open.
+- The displayed QR rotates about every 10 seconds and each signed link expires after 25 seconds.
+- A valid scan receives a five-minute grant bound to the session and browser UUID hash.
+- A copied grant cannot be reused with a different browser UUID.
+- The session state and time window are checked again during final submission.
 
-This is a practical deterrent, not proof of physical-device identity. Web browsers do not expose a permanent phone identifier. A determined user may bypass browser-based controls by clearing site data, changing browsers, or using another device. Stronger identity assurance requires institutional sign-in, a trusted mobile application, or administrator verification.
+A live QR can still be photographed and transmitted before it expires. Fully proving physical presence requires another trusted signal such as administrator verification, institutional authentication, or a managed application.
 
-The application now also saves a local receipt for every successful or device-blocked session. Rescanning in the same persistent browser goes directly to the already-submitted state instead of reopening the attendance form. Server-side checks remain authoritative and run under a lock.
+### Browser device control
 
-Students should use their phone's main Chrome, Safari, Firefox, or Samsung Internet browser. QR scanner WebViews, social-media in-app browsers, private tabs, and browsers configured to erase site data may create a new storage partition on every scan. A website cannot reliably recognize those partitions as the same physical phone.
+The student app stores a random UUID in persistent `localStorage`. Apps Script stores only its SHA-256 hash. Within one session, the same roll cannot be checked in twice and the same stored browser UUID cannot submit a second roll.
 
-After upgrading an existing installation, run **Club Attendance > Setup / Initialise Workbook** once. This adds the `Device ID` header without deleting existing attendance data. Then publish a new deployment version.
+This is a practical proxy-attendance deterrent, not hardware identity. Clearing site data, changing browsers, using isolated in-app WebViews, or using another device creates a new identifier. Students should scan with their normal Chrome, Safari, Firefox, or Samsung Internet browser and keep site storage enabled.
 
-## Link-Sharing Protection
+### API boundaries
 
-The administrator dashboard no longer displays a permanent attendance URL. Instead, it shows a signed QR code that refreshes every 10 seconds. Each generated link expires after 25 seconds.
+- Attendance API traffic from the browser goes only to same-origin `/api/attendance`.
+- Vercel validates methods, content type, body size, action names, field types, and field lengths.
+- Vercel adds the API secret only after validation and redacts secrets from upstream JSON.
+- Apps Script independently verifies the secret and action fields.
+- Attendance checks and writes run under `LockService`.
+- Untrusted spreadsheet text is sanitized before storage.
+- Security headers deny framing and restrict scripts, forms, images, and network connections.
 
-Only an authorized spreadsheet dialog receives the temporary credential needed to request fresh QR links. Student web pages cannot call the QR generator to renew an expired shared link. Signing and grant-validation helpers are private Apps Script functions and are not exposed through `google.script.run`.
+The student page also loads visual assets from the origins allowed in `vercel/vercel.json`; those non-executable font and image resources are not integrity-pinned. The administrator dialog loads QRCode.js from cdnjs with a fixed version and Subresource Integrity hash; it fails closed if the verified library cannot load.
 
-When a student scans a valid QR code, the server issues a temporary five-minute access grant bound to that browser's device identifier. The grant is required for roll-number lookup and final attendance submission. As a result:
-
-- Opening the permanent Web App URL without a live QR signature is rejected.
-- Calling the rotating QR endpoint without the administrator dialog credential is rejected.
-- Removing or changing the QR signature or expiration timestamp is rejected.
-- Screenshots and copied QR links stop working shortly after generation.
-- A grant copied from one browser cannot be used from a different browser device.
-- Students who have already scanned can complete the form after the visible QR rotates, provided they finish within five minutes.
-
-No browser-based system can make a URL physically impossible to photograph or transmit. Someone who shares a live QR image immediately may still allow another person to scan it before its short expiration. Fully preventing real-time remote sharing requires an additional presence signal such as administrator verification, institutional authentication, a managed campus network, or location checking. The rotating signed QR substantially reduces the useful sharing window without collecting precise location data.
+In-memory proxy rate limits apply per warm Vercel function instance. They reduce repeated-browser and single-instance abuse but are not a global distributed quota. Use Vercel Firewall or another durable rate-limit store when stricter abuse protection is required.
 
 ## Daily Use
 
-The **Club Attendance** menu appears whenever an administrator opens the connected spreadsheet.
-
 | Menu command | Purpose |
 | --- | --- |
-| `Create New Attendance Session` | Opens a timed session and displays its QR code |
-| `Show Current QR Code` | Reopens the QR code for the latest open session |
-| `Close Current Session` | Stops further check-ins for the active session |
-| `Reset / Clear All Sessions` | Deletes session and check-in history while retaining students |
-| `Setup / Initialise Workbook` | Creates missing sheets, headers, and default settings |
+| `Create New Attendance Session` | Creates a timed session and opens its rotating QR |
+| `Show Current QR Code` | Reopens the latest open session QR |
+| `Close Current Session` | Stops further check-ins |
+| `Reset / Clear All Sessions` | Deletes session and check-in history but keeps students |
+| `Setup / Initialise Workbook` | Adds missing sheets, headers, and settings safely |
 
-The reset action cannot be undone. Make a spreadsheet copy before clearing production data.
+The reset action cannot be undone. Make a Sheet copy before clearing production data. The lock prevents concurrent writes but Google Sheets does not provide multi-range transactions; if a reset operation fails partway through, inspect the workbook and rerun reset from the backup or a known state.
 
-### Student access with multiple Google accounts
+## Updating
 
-Google officially states that simultaneous multi-login is not supported for Apps Script web apps. A student signed in to two or more Google accounts may see an account-selection, authorization, permission, or page-loading error before the B-RIG application itself opens.
-
-As a practical workaround, every generated B-RIG QR URL includes `authuser=0`. This tells Google to use the browser's primary signed-in account instead of trying to resolve several active accounts. The web app is deployed for anonymous access and executes as the administrator, so the selected student account is not used to access the attendance spreadsheet.
-
-Google does not guarantee that account-slot selection resolves every multi-login or Workspace-policy combination. If Google's page still appears before B-RIG loads, ask the student to use either supported fallback:
-
-1. Open an incognito/private browsing window, scan or paste the QR link there, and use only the intended Google account if sign-in is requested.
-2. Sign out of all Google accounts, sign back in to only one account, and open the QR link again.
-
-See Google's official [Apps Script troubleshooting guidance for multiple accounts](https://developers.google.com/apps-script/guides/support/troubleshooting#issues_with_multiple_google_accounts).
-
-## Updating an Existing Installation
-
-Pull the latest code and upload it:
+Run tests before every deployment:
 
 ```bash
 git pull
 npm ci
+npm test
+```
+
+For Apps Script changes:
+
+```bash
 npx clasp push --force
 ```
 
-Then open **Deploy > Manage deployments** in Apps Script, edit the active deployment, choose **New version**, and deploy it. Existing spreadsheet data is preserved.
+Then select **Deploy > Manage deployments**, edit the existing web app, choose **New version**, and deploy. `clasp push` updates source but does not change an existing versioned `/exec` deployment. Keeping the same deployment preserves `APPS_SCRIPT_URL`.
+
+For frontend or proxy changes, deploy the updated commit through Vercel. Run **Setup / Initialise Workbook** once after an update that adds settings or headers. Setup also neutralizes formula-like values left in the historical `User Agent` column by older deployments.
+
+To rotate the API secret, generate a new value and update both `VERCEL_API_SECRET` and `APPS_SCRIPT_API_SECRET` during a short maintenance window, then redeploy Vercel. A mismatch causes temporary API failure but does not expose either value.
+
+## Legacy Upgrade
+
+Use this order when migrating an installation that sent students to Apps Script or a GitHub Pages redirect:
+
+1. Pull this version and run `npm test`.
+2. Upload Apps Script and run **Setup / Initialise Workbook**.
+3. Create `VERCEL_API_SECRET` and publish a new Apps Script web app version.
+4. Deploy `vercel` with the matching environment variables.
+5. Set `Student Web App URL` to the stable Vercel or custom root origin.
+6. Create a fresh session and complete [`TESTING.md`](TESTING.md).
+7. Merge and deploy deletion of the old `qr.html` page, or disable the old GitHub Pages source.
+8. Verify every previously published redirect URL is unavailable and no current QR uses it.
+
+Do not reuse an old QR. Existing remote GitHub Pages content remains reachable until the branch deleting it is merged into the configured Pages source and GitHub finishes publishing.
 
 ## Troubleshooting
 
+### A student sees a Google account chooser, Drive error, or `script.google.com`
+
+The student followed an obsolete or misconfigured URL. Multiple Google accounts are not a special case in the hybrid architecture and private browsing is not required.
+
+1. Decode the current QR and verify its hostname is the Vercel/custom student host.
+2. Set `Settings > Student Web App URL` to the root HTTPS student origin.
+3. Close obsolete sessions and generate a fresh QR.
+4. Remove or disable any old GitHub Pages redirect.
+
+### The QR dialog says the student URL is not configured
+
+Use a root HTTPS origin such as `https://club.vercel.app`. Remove paths, query strings, fragments, Apps Script URLs, and trailing deployment routes. Reopen the QR dialog after correcting the setting.
+
+### The student page says attendance is temporarily unavailable
+
+Check the following without exposing values in screenshots or logs:
+
+1. `APPS_SCRIPT_URL` is an active production `/exec` deployment.
+2. Apps Script is deployed as **Execute as: Me** and **Who has access: Anyone**.
+3. `APPS_SCRIPT_API_SECRET` exactly matches the `VERCEL_API_SECRET` Script Property.
+4. Vercel was redeployed after environment changes.
+5. The Apps Script `/exec` URL returns the status JSON when opened by an administrator.
+
+### The browser reports too many requests
+
+Wait for the one-minute window and retry once. If legitimate meeting traffic is affected, inspect Vercel Firewall logs and account for students sharing one campus IP before adjusting limits.
+
+### The secure link or grant expired
+
+Scan the currently displayed QR again. Old images expire after about 25 seconds and an already-open form must be completed within five minutes.
+
+### Browser storage cannot be used
+
+Open the link in the phone's normal browser and allow persistent site storage. Private tabs, scanner WebViews, and browsers that erase data cannot reliably retain the device identifier or receipt.
+
+### The admin QR says reconnecting
+
+The dialog retries transient Apps Script failures automatically. Check the administrator connection. If it does not recover, close and reopen **Show Current QR Code** while the session is still open.
+
+### Code changes are not live
+
+Publish a new Apps Script deployment version for `.js` or `AdminSidebar.html` changes. Redeploy Vercel for files under `vercel/`. Confirm the Sheet points to the stable production Vercel origin rather than an old preview.
+
 ### `clasp` reports that the Apps Script API is disabled
 
-Open [Apps Script user settings](https://script.google.com/home/usersettings), enable the **Google Apps Script API**, wait a few minutes, and run `npx clasp push --force` again.
+Enable the Google Apps Script API in the administrator account's Apps Script user settings, wait a few minutes, and run `npx clasp push --force` again.
 
-### `User has not enabled the Apps Script API`
+### Check-in schema validation fails
 
-Confirm that the API was enabled for the same Google account used by `npx clasp login`. Run `npx clasp logout`, then `npx clasp login` if the wrong account was selected.
-
-### An administrator sees an account-selection, authorization, or permission error
-
-This commonly happens when the browser profile contains multiple signed-in Google accounts. Google Sheets may open under one account while Clasp or Apps Script authorizes another.
-
-1. Close the Google Sheet and Apps Script tabs.
-2. Sign out of every Google account in the browser profile.
-3. Sign in only to the administrator account that owns the spreadsheet.
-4. Reset Clasp authentication:
-
-```bash
-npx clasp logout
-npx clasp login
-```
-
-5. Reopen the spreadsheet from that account and retry the upload or deployment.
-
-For ongoing administration, keep a dedicated browser profile with only the B-RIG administrator account signed in.
-
-### A student cannot open the QR check-in link
-
-If the student is signed in to multiple Google accounts, the failure may occur on Google's page before B-RIG loads. Ask the student to open the QR link in an incognito/private window. If that does not work, they should sign out of all Google accounts, sign in to only one account, and retry the same link.
-
-This is a [documented Google Apps Script multi-login limitation](https://developers.google.com/apps-script/guides/support/troubleshooting#issues_with_multiple_google_accounts), not an attendance-session validation error. Also confirm that the session is still open and that the deployed Web App URL ends in `/exec`.
-
-### Google Drive says "Sorry, unable to open the file at present"
-
-This page is generated by Google before B-RIG loads, so the application cannot replace it with a custom error. It means Google could not resolve or authorize the Apps Script deployment URL. Check the following in order:
-
-1. Open **Apps Script > Deploy > Manage deployments** and confirm the web app deployment still exists.
-2. Confirm **Execute as** is `Me` and **Who has access** is `Anyone`.
-3. Copy the active deployment URL ending in `/exec` into `Settings > Public Web App URL`. Do not paste an Apps Script editor URL, Google Drive sharing URL, `/dev` test URL, or URL from a deleted deployment.
-4. After uploading code, edit the active deployment, select **New version**, and deploy again. Merely running `clasp push` does not update a versioned web app.
-5. Open the link in the phone's main Chrome, Safari, Firefox, or Samsung Internet browser instead of the QR scanner's embedded browser.
-6. If several Google accounts are signed in, use a dedicated single-account browser profile. As a temporary access workaround, use a private window with only the intended account, but note that private storage weakens browser-device recognition after the window closes.
-
-Generated QR links automatically include `authuser=0` to select the primary Google account. If that primary account is controlled by a school or company that blocks Apps Script, use a browser profile containing only an account that is permitted to access the deployment.
-
-The server now refuses to generate a QR code unless `Public Web App URL` matches the standard production Apps Script `/exec` format. This catches malformed configuration but cannot detect a correctly shaped URL whose deployment was later deleted.
-
-### The Club Attendance menu does not appear
-
-Confirm that `npx clasp push --force` completed successfully, then refresh the Google Sheet. The menu is displayed in the spreadsheet, not in the Apps Script editor.
-
-### The QR code says the Web App URL is missing
-
-Copy the deployed URL ending in `/exec` into the `Public Web App URL` row of the `Settings` sheet. Do not use the deployment test URL ending in `/dev`.
-
-### Students cannot open the check-in page
-
-Edit the web app deployment and confirm that **Who has access** is set to **Anyone**. Some managed Google Workspace accounts prohibit public deployments; contact the Workspace administrator or deploy from an account that permits public web apps.
-
-### Code changes are not visible in the live application
-
-Running `npx clasp push --force` updates the Apps Script source but not an existing versioned web deployment. Create a new version under **Deploy > Manage deployments**.
-
-## Verification
-
-After installation, use the scenarios in [`TESTING.md`](TESTING.md) to verify roll-number validation, registration, device enforcement, duplicate detection, session expiry, closed sessions, and simultaneous scans.
+Do not reorder standard `Checkins` columns. Run **Setup / Initialise Workbook** to append a missing `Device ID` column. Restore renamed or reordered headers manually before accepting attendance.
 
 ## Project Structure
 
-| File | Responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `Code.js` | Menus, session management, web endpoint, and attendance workflow |
-| `Config.js` | Sheet names, defaults, statuses, and shared configuration |
-| `Database.js` | Google Sheets queries, device checks, and concurrency locking |
-| `Index.html` | Student check-in page |
-| `ClientScript.html` | Browser-side interaction and animation logic |
-| `Styles.html` | Application styling |
-| `AdminSidebar.html` | Administrative QR-code dialog |
-| `appsscript.json` | Apps Script runtime, scopes, and web app settings |
+| `Code.js` | Admin menu, sessions, signed QR, JSON API, grants, and attendance workflow |
+| `Config.js` | Constants, validation, hashing, and Sheet settings |
+| `Database.js` | Sheet queries, duplicate checks, schema enforcement, and locking |
+| `AdminSidebar.html` | Administrator-only rotating QR dialog |
+| `appsscript.json` | Apps Script runtime and web app settings |
+| `vercel/index.html` | Standalone student interface |
+| `vercel/styles.css` | Responsive student styling |
+| `vercel/app.js` | Browser state, device UUID, API calls, and UI workflow |
+| `vercel/api/attendance.js` | Validating Vercel-to-Apps-Script proxy |
+| `vercel/vercel.json` | Function duration and browser security headers |
+| `test/` | Apps Script and architecture regression tests |
+| `vercel/test/` | Proxy unit tests |
 
-## Security Notes
+## Privacy
 
-- Keep the Script ID and `.clasp.json` out of public commits.
-- Treat the spreadsheet as sensitive because it contains student names, roll numbers, and attendance records.
-- Grant spreadsheet edit access only to authorized administrators.
-- Explain the one-attendance-per-browser-device policy to students before check-in.
-- Use the generated session URLs rather than manually constructing or reusing old links.
-- Close attendance sessions when check-in is complete.
-
----
-
-Built for the B-RIG club.
+The Sheet contains student identity and attendance records. Restrict Sheet edit access, avoid exporting logs unnecessarily, set an appropriate retention policy, and close sessions promptly. Signed QR parameters may appear in Vercel request metadata and expire quickly; restrict observability access and retention. Never commit `.clasp.json`, production environment files, API secrets, or exported student data.
