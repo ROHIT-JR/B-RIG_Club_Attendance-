@@ -9,9 +9,7 @@ const CONFIG = {
   ACCESS_CONTROL: {
     QR_LIFETIME_SECONDS: 25,
     QR_REFRESH_SECONDS: 10,
-    GRANT_LIFETIME_SECONDS: 300,
-    GOOGLE_ACCOUNT_SLOT: 0,
-    QR_REDIRECT_URL: 'https://rohit-jr.github.io/B-RIG_Club_Attendance-/qr.html'
+    GRANT_LIFETIME_SECONDS: 300
   },
   DEVICE_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   CHECKIN_HEADERS: [
@@ -27,11 +25,11 @@ const CONFIG = {
   },
   DEFAULT_SETTINGS: {
     'Club Name': 'Student Club',
-    'Public Web App URL': 'Paste your web app URL here',
+    'Student Web App URL': 'Paste your Vercel student URL here',
     'New registrations require approval': 'FALSE',
     'Default attendance window in minutes': '60',
     'Time zone': 'Asia/Kolkata',
-    'Version': '1.0.0'
+    'Version': '2.0.0'
   },
   STATUS: {
     STUDENT: {
@@ -109,11 +107,30 @@ function hashDeviceId(deviceId) {
 }
 
 /**
- * Accepts only a production Apps Script web-app deployment URL.
+ * Accepts an HTTPS student frontend while rejecting Google-hosted script URLs.
  * @param {string} url
  * @returns {boolean}
  */
-function isValidWebAppUrl(url) {
+function isValidStudentAppUrl(url) {
+  const value = String(url || '').trim();
+  const match = value.match(/^https:\/\/([A-Za-z0-9.-]+)(?::\d+)?(?:\/[^\s#]*)?$/);
+  if (!match) return false;
+
+  const hostname = match[1].toLowerCase();
+  const blockedHosts = [
+    'script.google.com',
+    'script.googleusercontent.com',
+    'drive.google.com'
+  ];
+  return !blockedHosts.some(host => hostname === host || hostname.endsWith('.' + host));
+}
+
+/**
+ * Detects the legacy Apps Script student URL during migration.
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isAppsScriptWebAppUrl(url) {
   return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec\/?(?:\?.*)?$/.test(
     String(url || '').trim()
   );
@@ -136,4 +153,16 @@ function getSetting(key) {
     }
   }
   return CONFIG.DEFAULT_SETTINGS[key] || '';
+}
+
+/**
+ * Returns the configured student frontend URL, with a safe legacy-setting fallback.
+ * @returns {string}
+ */
+function getStudentAppUrl() {
+  const studentUrl = getSetting('Student Web App URL');
+  if (isValidStudentAppUrl(studentUrl)) return String(studentUrl).trim();
+
+  const legacyUrl = getSetting('Public Web App URL');
+  return isValidStudentAppUrl(legacyUrl) ? String(legacyUrl).trim() : '';
 }

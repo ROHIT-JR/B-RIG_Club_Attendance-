@@ -62,14 +62,18 @@ function initWorkbook() {
     dashboard.setFrozenColumns(3);
   }
 
-  // Populate default settings if empty
+  // Add missing default settings without replacing existing values.
   const settingsSheet = ss.getSheetByName(CONFIG.SHEETS.SETTINGS);
-  if (settingsSheet && settingsSheet.getLastRow() <= 1) {
-    const settingsData = [];
-    for (const [key, value] of Object.entries(CONFIG.DEFAULT_SETTINGS)) {
-      settingsData.push([key, value]);
+  if (settingsSheet) {
+    const existingKeys = settingsSheet.getLastRow() > 1
+      ? settingsSheet.getRange(2, 1, settingsSheet.getLastRow() - 1, 1).getValues().flat()
+      : [];
+    const missingSettings = Object.entries(CONFIG.DEFAULT_SETTINGS)
+      .filter(([key]) => !existingKeys.includes(key));
+    if (missingSettings.length > 0) {
+      settingsSheet.getRange(settingsSheet.getLastRow() + 1, 1, missingSettings.length, 2)
+        .setValues(missingSettings);
     }
-    settingsSheet.getRange(2, 1, settingsData.length, 2).setValues(settingsData);
   }
 
   SpreadsheetApp.getUi().alert('Workbook initialised successfully.');
@@ -211,11 +215,14 @@ function showCurrentSessionQR(providedToken) {
     token = openSession.token;
   }
 
-  const webAppUrl = getSetting('Public Web App URL');
-  if (!isValidWebAppUrl(webAppUrl)) {
+  const studentAppUrl = getStudentAppUrl();
+  if (!studentAppUrl) {
+    const legacyUrl = getSetting('Public Web App URL');
+    const migrationMessage = isAppsScriptWebAppUrl(legacyUrl)
+      ? 'Public Student URL is still configured as an Apps Script URL. Set Student Web App URL to the deployed Vercel attendance URL.'
+      : 'Set Student Web App URL in the Settings sheet to the deployed HTTPS Vercel attendance URL.';
     SpreadsheetApp.getUi().alert(
-      'Set Public Web App URL to the active Apps Script deployment URL ending in /exec. ' +
-      'Do not use an editor, /dev, Google Drive, or deleted deployment link.'
+      migrationMessage
     );
     return;
   }
@@ -254,18 +261,16 @@ function getRotatingQrData(token, adminGrant) {
     return { valid: false, error: 'This attendance session is no longer open.' };
   }
 
-  const webAppUrl = getSetting('Public Web App URL');
-  if (!isValidWebAppUrl(webAppUrl)) {
-    return { valid: false, error: 'The production Web App URL is invalid. Configure the active /exec deployment URL.' };
+  const studentAppUrl = getStudentAppUrl();
+  if (!studentAppUrl) {
+    return { valid: false, error: 'The Student Web App URL is not configured. Set it to the deployed Vercel frontend.' };
   }
 
   const expiresAt = Date.now() + (CONFIG.ACCESS_CONTROL.QR_LIFETIME_SECONDS * 1000);
   const signature = signQrAccess_(token, expiresAt);
-  const baseWebAppUrl = webAppUrl.split('?')[0].replace(/\/$/, '');
-  const targetUrl = `${baseWebAppUrl}?authuser=${CONFIG.ACCESS_CONTROL.GOOGLE_ACCOUNT_SLOT}` +
-    `&session=${encodeURIComponent(token)}` +
+  const separator = studentAppUrl.includes('?') ? '&' : '?';
+  const url = `${studentAppUrl}${separator}session=${encodeURIComponent(token)}` +
     `&access=${encodeURIComponent(signature)}&expires=${expiresAt}`;
-  const url = `${CONFIG.ACCESS_CONTROL.QR_REDIRECT_URL}?url=${encodeURIComponent(targetUrl)}`;
 
   return {
     valid: true,
@@ -393,25 +398,120 @@ function closeCurrentSession() {
 // --------------------------------------------------------------------------------
 
 /**
- * Renders the Web App.
+ * Returns a minimal status response. Student attendance is hosted on Vercel.
  */
-function doGet(e) {
-  const template = HtmlService.createTemplateFromFile('Index');
-  template.sessionToken = (e && e.parameter && e.parameter.session) ? e.parameter.session : '';
-  template.accessCode = (e && e.parameter && e.parameter.access) ? e.parameter.access : '';
-  template.accessExpires = (e && e.parameter && e.parameter.expires) ? e.parameter.expires : '';
-  
-  return template
-    .evaluate()
-    .setTitle(getSetting('Club Name') + ' Attendance')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0');
+function doGet() {
+  return jsonResponse_({
+    ok: true,
+    service: 'B-RIG Attendance API',
+    studentFrontend: 'external'
+  });
 }
 
 /**
- * Helper to include HTML/CSS inside other HTML files.
+ * Handles authenticated Vercel-to-Apps-Script JSON requests.
+ * @param {Object} e
+ * @returns {TextOutput}
  */
-function include(filename) {
-  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !String(e.postData.type || '').toLowerCase().startsWith('application/json')) {
+      return jsonResponse_({ success: false, error: 'Request could not be processed.' });
+    }
+
+    const contents = String(e.postData.contents || '');
+    if (!contents || contents.length > 16384) {
+      return jsonResponse_({ success: false, error: 'Request could not be processed.' });
+    }
+
+    const request = JSON.parse(contents);
+    if (!request || typeof request !== 'object' || Array.isArray(request) || !verifyVercelApiSecret_(request.apiSecret)) {
+      return jsonResponse_({ success: false, error: 'Request could not be processed.' });
+    }
+
+    switch (request.action) {
+      case 'sessionDetails':
+        return jsonResponse_(getClientSessionDetails(
+          requireApiString_(request.sessionToken, 128),
+          requireApiString_(request.accessCode, 256),
+          requireApiString_(request.accessExpires, 32),
+          requireApiString_(request.deviceId, 64)
+        ));
+
+      case 'validateRoll':
+        return jsonResponse_(validateRollNo(
+          requireApiString_(request.rollNumber, 32),
+          requireApiString_(request.sessionToken, 128),
+          requireApiString_(request.deviceId, 64),
+          requireApiString_(request.accessGrant, 128)
+        ));
+
+      case 'submitAttendance':
+        if (typeof request.isNewRegistration !== 'boolean') throw new Error('Invalid request field.');
+        return jsonResponse_(submitAttendance(
+          requireApiString_(request.sessionToken, 128),
+          requireApiString_(request.rollNumber, 32),
+          optionalApiString_(request.fullName, 80),
+          request.isNewRegistration,
+          requireApiString_(request.deviceId, 64),
+          optionalApiString_(request.userAgent, 250),
+          requireApiString_(request.accessGrant, 128)
+        ));
+
+      default:
+        return jsonResponse_({ success: false, error: 'Unsupported action.' });
+    }
+  } catch (error) {
+    return jsonResponse_({ success: false, error: 'Request could not be processed.' });
+  }
+}
+
+/**
+ * Verifies the server-to-server secret stored in Script Properties.
+ * @param {*} providedSecret
+ * @returns {boolean}
+ */
+function verifyVercelApiSecret_(providedSecret) {
+  const configuredSecret = PropertiesService.getScriptProperties().getProperty('VERCEL_API_SECRET');
+  if (!configuredSecret || typeof providedSecret !== 'string') return false;
+  return safeStringEqual_(configuredSecret, providedSecret);
+}
+
+/**
+ * Validates a required API string field.
+ * @param {*} value
+ * @param {number} maxLength
+ * @returns {string}
+ */
+function requireApiString_(value, maxLength) {
+  if (typeof value !== 'string' || !value || value.length > maxLength) {
+    throw new Error('Invalid request field.');
+  }
+  return value;
+}
+
+/**
+ * Validates an optional API string field.
+ * @param {*} value
+ * @param {number} maxLength
+ * @returns {string}
+ */
+function optionalApiString_(value, maxLength) {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string' || value.length > maxLength) {
+    throw new Error('Invalid request field.');
+  }
+  return value;
+}
+
+/**
+ * Creates a JSON Apps Script response.
+ * @param {Object} payload
+ * @returns {TextOutput}
+ */
+function jsonResponse_(payload) {
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
