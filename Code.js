@@ -22,7 +22,7 @@ function onOpen() {
  * Initialises the workbook with required sheets and headers.
  */
 function initWorkbook() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getAttendanceSpreadsheet();
 
   const sheetsConfig = [
     { name: CONFIG.SHEETS.DASHBOARD, headers: ['S.No', 'Name', 'Roll No'] },
@@ -86,7 +86,7 @@ function initWorkbook() {
  */
 function createNewSession() {
   const ui = SpreadsheetApp.getUi();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getAttendanceSpreadsheet();
   
   // Basic prompt for session title
   const titleResponse = ui.prompt('New Session', 'Enter Session Title (e.g., General Meeting 1):', ui.ButtonSet.OK_CANCEL);
@@ -182,7 +182,7 @@ function applyDashboardFormatting(dashboard, colIndex) {
  * Finds the most recently opened session.
  */
 function getOpenSession() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getAttendanceSpreadsheet();
   const sessionSheet = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
   if (!sessionSheet) return null;
 
@@ -394,7 +394,7 @@ function closeCurrentSession() {
     const openSession = getOpenSession();
     if (!openSession) return false;
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sessionSheet = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
     const headers = sessionSheet.getRange(1, 1, 1, sessionSheet.getLastColumn()).getValues()[0];
     const statusIndex = headers.indexOf('Status') + 1;
@@ -480,6 +480,15 @@ function doPost(e) {
         return jsonResponse_({ success: false, error: 'Unsupported action.' });
     }
   } catch (error) {
+    console.error('Attendance API request failed:', error);
+    if (error && error.name === 'AttendanceConfigurationError') {
+      return jsonResponse_({
+        success: false,
+        error: 'Attendance is not configured correctly. Contact the club administrator.',
+        retryable: false,
+        configurationError: true
+      });
+    }
     return jsonResponse_({
       success: false,
       error: 'The attendance service is temporarily unavailable. Please try again.',
@@ -663,7 +672,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
       };
     }
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const studentsSheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
     const dashboard = ss.getSheetByName(CONFIG.SHEETS.DASHBOARD);
     const checkinsSheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
@@ -785,7 +794,7 @@ function sanitizeSpreadsheetText_(value, maxLength) {
  * Neutralizes formula-like user agents left by older deployments.
  */
 function sanitizeExistingCheckinUserAgents_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getAttendanceSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
   if (!sheet || sheet.getLastRow() < 2) return;
 
@@ -819,7 +828,7 @@ function clearAllData() {
   if (response !== ui.Button.YES) return;
 
   DB.withLock(() => {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
 
     const sessions = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
     if (sessions && sessions.getLastRow() > 1) {

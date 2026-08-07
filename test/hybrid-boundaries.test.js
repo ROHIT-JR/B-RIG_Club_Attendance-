@@ -20,6 +20,8 @@ test('student frontend is Vercel-only and has no Apps Script client dependency',
 
 test('Apps Script keeps admin QR rotation and locked attendance writes', () => {
   const code = read('Code.js');
+  const config = read('Config.js');
+  const database = read('Database.js');
   const admin = read('AdminSidebar.html');
 
   assert.match(admin, /google\.script\.run/);
@@ -34,6 +36,10 @@ test('Apps Script keeps admin QR rotation and locked attendance writes', () => {
   assert.match(code, /hashDeviceId/);
   assert.match(code, /sanitizeSpreadsheetText_\(userAgent/);
   assert.match(code, /getFormulas\(\)/);
+  assert.match(config, /SPREADSHEET_ID/);
+  assert.match(config, /SpreadsheetApp\.openById/);
+  assert.match(config, /attendanceSpreadsheet_/);
+  assert.doesNotMatch(code + database, /SpreadsheetApp\.getActiveSpreadsheet/);
   assert.doesNotMatch(code, /authuser|QR_REDIRECT_URL|github\.io\/.*qr\.html/);
 });
 
@@ -73,4 +79,5 @@ test('Vercel proxy applies request limits and leaves enough time for Apps Script
   assert.match(proxy, /Retry-After/);
   assert.match(proxy, /429/);
   assert.match(browser, /REQUEST_TIMEOUT_MS = 30000/);
+  assert.match(browser, /configurationError/);
 });

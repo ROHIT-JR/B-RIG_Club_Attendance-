@@ -35,7 +35,7 @@ const DB = {
    * @returns {Array} Array of student objects.
    */
   getActiveStudents: function() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
     if (!sheet) return [];
 
@@ -65,7 +65,7 @@ const DB = {
    */
   getStudentByRollNo: function(rollNumber) {
     const normalized = normalizeRollNo(rollNumber);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
     if (!sheet) return null;
 
@@ -94,7 +94,7 @@ const DB = {
    */
   getSessionByToken: function(token) {
     if (!token) return null;
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
     if (!sheet) return null;
 
@@ -134,7 +134,7 @@ const DB = {
    */
   getCheckin: function(sessionId, rollNumber) {
     const normalized = normalizeRollNo(rollNumber);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (!sheet) return null;
 
@@ -163,7 +163,7 @@ const DB = {
    * Ensures all duplicate-enforcement columns exist before accepting attendance.
    */
   ensureCheckinSchema: function() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (!sheet) throw new Error('Checkins sheet is missing. Run workbook setup first.');
 
@@ -193,7 +193,7 @@ const DB = {
    * @returns {Object|null}
    */
   getCheckinByDevice: function(sessionId, deviceHash) {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (!sheet || !deviceHash) return null;
 

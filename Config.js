@@ -151,12 +151,52 @@ function isAppsScriptWebAppUrl(url) {
 }
 
 /**
+ * Returns the attendance workbook in both bound-editor and web-app executions.
+ * Workbook setup records the bound Sheet ID for contexts with no active file.
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
+ */
+let attendanceSpreadsheet_ = null;
+
+function getAttendanceSpreadsheet() {
+  if (attendanceSpreadsheet_) return attendanceSpreadsheet_;
+
+  const properties = PropertiesService.getScriptProperties();
+  const activeSpreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (activeSpreadsheet) {
+    if (typeof activeSpreadsheet.getId === 'function') {
+      const activeId = activeSpreadsheet.getId();
+      if (activeId && properties.getProperty('SPREADSHEET_ID') !== activeId) {
+        properties.setProperty('SPREADSHEET_ID', activeId);
+      }
+    }
+    attendanceSpreadsheet_ = activeSpreadsheet;
+    return attendanceSpreadsheet_;
+  }
+
+  const spreadsheetId = properties.getProperty('SPREADSHEET_ID');
+  if (!spreadsheetId) {
+    const error = new Error('Attendance workbook is not configured. Run workbook setup from the bound Google Sheet.');
+    error.name = 'AttendanceConfigurationError';
+    throw error;
+  }
+  try {
+    attendanceSpreadsheet_ = SpreadsheetApp.openById(spreadsheetId);
+    return attendanceSpreadsheet_;
+  } catch (error) {
+    console.error('Could not open the configured attendance workbook:', error);
+    const configurationError = new Error('Attendance workbook could not be opened by the deployed Apps Script account.');
+    configurationError.name = 'AttendanceConfigurationError';
+    throw configurationError;
+  }
+}
+
+/**
  * Gets a setting value from the Settings sheet.
  * @param {string} key 
  * @returns {string}
  */
 function getSetting(key) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getAttendanceSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.SHEETS.SETTINGS);
   if (!sheet) return CONFIG.DEFAULT_SETTINGS[key] || '';
   

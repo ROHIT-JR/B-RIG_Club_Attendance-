@@ -242,7 +242,9 @@
           retryable: response.retryable === true,
           help: response.retryable === true
             ? 'Retry when your connection is stable, or scan the current QR code for a fresh link.'
-            : undefined
+            : response.configurationError === true
+              ? 'Contact the club administrator before scanning again.'
+              : undefined
         });
         return;
       }

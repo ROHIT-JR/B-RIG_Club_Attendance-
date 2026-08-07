@@ -50,7 +50,7 @@ function createHarness(options = {}) {
   };
 
   const context = vm.createContext({
-    console,
+    console: options.console || console,
     DB: db,
     SpreadsheetApp: options.SpreadsheetApp || {
       getActiveSpreadsheet() {
@@ -193,6 +193,12 @@ test('database rejects malformed or reversed session date ranges', () => {
   ];
   const context = vm.createContext({
     console,
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: () => null,
+        setProperty() {}
+      })
+    },
     SpreadsheetApp: {
       getActiveSpreadsheet: () => ({
         getSheetByName: () => ({
@@ -206,6 +212,59 @@ test('database rejects malformed or reversed session date ranges', () => {
   assert.equal(vm.runInContext("DB.getSessionByToken('bad-token')", context), null);
   assert.equal(vm.runInContext("DB.getSessionByToken('reversed-token')", context), null);
   assert.equal(vm.runInContext("DB.getSessionByToken('good-token').sessionId", context), 'SES-GOOD');
+});
+
+test('records the bound Sheet ID and reopens it during web-app execution', () => {
+  const boundSheet = { getId: () => 'sheet-123' };
+  const boundHarness = createHarness({
+    SpreadsheetApp: { getActiveSpreadsheet: () => boundSheet }
+  });
+
+  assert.equal(boundHarness.call('getAttendanceSpreadsheet'), boundSheet);
+  assert.equal(boundHarness.properties.get('SPREADSHEET_ID'), 'sheet-123');
+
+  let openedId = '';
+  let openCount = 0;
+  const webSheet = { name: 'web-app-sheet' };
+  const webHarness = createHarness({
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => null,
+      openById: spreadsheetId => {
+        openCount += 1;
+        openedId = spreadsheetId;
+        return webSheet;
+      }
+    }
+  });
+  webHarness.properties.set('SPREADSHEET_ID', 'sheet-123');
+
+  assert.equal(webHarness.call('getAttendanceSpreadsheet'), webSheet);
+  assert.equal(webHarness.call('getAttendanceSpreadsheet'), webSheet);
+  assert.equal(openedId, 'sheet-123');
+  assert.equal(openCount, 1);
+});
+
+test('classifies missing or inaccessible workbook configuration', () => {
+  const missingHarness = createHarness({
+    SpreadsheetApp: { getActiveSpreadsheet: () => null }
+  });
+  assert.throws(
+    () => missingHarness.call('getAttendanceSpreadsheet'),
+    error => error.name === 'AttendanceConfigurationError'
+  );
+
+  const inaccessibleHarness = createHarness({
+    console: { error() {}, log() {} },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => null,
+      openById: () => { throw new Error('Permission denied'); }
+    }
+  });
+  inaccessibleHarness.properties.set('SPREADSHEET_ID', 'inaccessible-sheet');
+  assert.throws(
+    () => inaccessibleHarness.call('getAttendanceSpreadsheet'),
+    error => error.name === 'AttendanceConfigurationError'
+  );
 });
 
 test('issues a device-bound grant only for a valid live QR and open session', () => {
@@ -493,4 +552,31 @@ test('Apps Script JSON API dispatches only the supported session-details action'
 
   assert.equal(response.valid, true);
   assert.ok(response.accessGrant);
+});
+
+test('Apps Script JSON API reports workbook configuration failures as non-retryable', () => {
+  const harness = createHarness({ console: { error() {}, log() {} } });
+  const qr = harness.issueQr();
+  const url = new URL(qr.url);
+  harness.db.getSessionByToken = () => {
+    const error = new Error('Workbook unavailable');
+    error.name = 'AttendanceConfigurationError';
+    throw error;
+  };
+
+  const response = harness.post({
+    action: 'sessionDetails',
+    apiSecret: API_SECRET,
+    sessionToken: harness.session.token,
+    accessCode: url.searchParams.get('access'),
+    accessExpires: url.searchParams.get('expires'),
+    deviceId: DEVICE_ID
+  });
+
+  assert.deepEqual(response, {
+    success: false,
+    error: 'Attendance is not configured correctly. Contact the club administrator.',
+    retryable: false,
+    configurationError: true
+  });
 });
