@@ -9,9 +9,14 @@ const CONFIG = {
   ACCESS_CONTROL: {
     QR_LIFETIME_SECONDS: 25,
     QR_REFRESH_SECONDS: 10,
-    GRANT_LIFETIME_SECONDS: 300
+    GRANT_LIFETIME_SECONDS: 300,
+    GOOGLE_ACCOUNT_SLOT: 0
   },
   DEVICE_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  CHECKIN_HEADERS: [
+    'Checkin ID', 'Timestamp', 'Session ID', 'Session Date', 'Roll Number',
+    'Full Name', 'Result', 'Source', 'User Agent', 'Device ID'
+  ],
   SHEETS: {
     DASHBOARD: 'Attendance Dashboard',
     STUDENTS: 'Students',
@@ -100,6 +105,17 @@ function hashDeviceId(deviceId) {
     Utilities.Charset.UTF_8
   );
   return digest.map(byte => (byte + 256).toString(16).slice(-2)).join('');
+}
+
+/**
+ * Accepts only a production Apps Script web-app deployment URL.
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isValidWebAppUrl(url) {
+  return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec\/?(?:\?.*)?$/.test(
+    String(url || '').trim()
+  );
 }
 
 /**

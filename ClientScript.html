@@ -1,6 +1,7 @@
 <script>
   const ROLL_NUMBER_PATTERN = /^CB\.SC\.U4[A-Z]{3}\d{2}\d{3}$/;
   const DEVICE_STORAGE_KEY = 'brig_device_id';
+  const ATTENDANCE_RECEIPT_PREFIX = 'brig_attended_';
   const BUTTON_LABELS = {
     continue: 'Continue securely',
     confirm: 'Confirm attendance',
@@ -77,6 +78,23 @@
     }
   }
 
+  function hasAttendanceReceipt() {
+    if (!state.sessionToken) return false;
+    try {
+      return localStorage.getItem(ATTENDANCE_RECEIPT_PREFIX + state.sessionToken) === 'recorded';
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function saveAttendanceReceipt() {
+    try {
+      localStorage.setItem(ATTENDANCE_RECEIPT_PREFIX + state.sessionToken, 'recorded');
+    } catch (error) {
+      // The server-side roll and device checks remain authoritative.
+    }
+  }
+
   function showView(viewName) {
     Object.values(views).forEach(view => {
       view.classList.remove('active');
@@ -121,6 +139,10 @@
       showError(errorElement, 'Browser storage is disabled. Enable it or use a standard browser window, then try again.');
       return;
     }
+    if (hasAttendanceReceipt()) {
+      showError(errorElement, 'Attendance has already been submitted from this browser for this session.');
+      return;
+    }
 
     setButtonLoading(button, true, label);
     google.script.run
@@ -145,6 +167,7 @@
 
   function handleAttendanceResponse(response, errorElement) {
     if (response.success || response.duplicate) {
+      saveAttendanceReceipt();
       if (response.duplicate) {
         const recordedAt = new Date(response.time).toLocaleTimeString([], {
           hour: '2-digit',
@@ -154,6 +177,13 @@
       }
       showView('success');
       createCelebration();
+      return;
+    }
+
+    if (response.deviceBlocked) {
+      saveAttendanceReceipt();
+      elements.invalidReason.textContent = response.error;
+      showView('invalid');
       return;
     }
 
@@ -204,6 +234,11 @@
         elements.sessionTitle.textContent = response.title || 'Attendance session';
         elements.sessionDate.textContent = response.date || '';
         state.accessGrant = response.accessGrant;
+        if (hasAttendanceReceipt()) {
+          elements.successMessage.textContent = 'Attendance has already been submitted from this browser for this session.';
+          showView('success');
+          return;
+        }
         showView('rollInput');
         elements.rollNumber.focus();
       })

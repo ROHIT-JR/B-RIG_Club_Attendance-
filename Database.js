@@ -136,6 +136,9 @@ const DB = {
     const sessionIndex = headers.indexOf('Session ID');
     const rollIndex = headers.indexOf('Roll Number');
     const timeIndex = headers.indexOf('Timestamp');
+    if (sessionIndex === -1 || rollIndex === -1 || timeIndex === -1) {
+      throw new Error('Checkins sheet headers are invalid. Run workbook setup again.');
+    }
 
     for (let i = 1; i < data.length; i++) {
       if (data[i][sessionIndex] === sessionId && normalizeRollNo(data[i][rollIndex]) === normalized) {
@@ -148,9 +151,9 @@ const DB = {
   },
 
   /**
-   * Ensures upgraded workbooks have a column for the hashed browser identifier.
+   * Ensures all duplicate-enforcement columns exist before accepting attendance.
    */
-  ensureDeviceColumn: function() {
+  ensureCheckinSchema: function() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (!sheet) throw new Error('Checkins sheet is missing. Run workbook setup first.');
@@ -159,8 +162,18 @@ const DB = {
     const headers = lastColumn > 0
       ? sheet.getRange(1, 1, 1, lastColumn).getValues()[0]
       : [];
-    if (!headers.includes('Device ID')) {
-      sheet.getRange(1, lastColumn + 1).setValue('Device ID').setFontWeight('bold');
+    const coreHeaders = CONFIG.CHECKIN_HEADERS.slice(0, -1);
+    const coreIsValid = coreHeaders.every((header, index) => headers[index] === header);
+    if (!coreIsValid) {
+      throw new Error('Checkins sheet columns were renamed or reordered. Restore the headers before accepting attendance.');
+    }
+
+    const deviceColumn = CONFIG.CHECKIN_HEADERS.length;
+    if (headers[deviceColumn - 1] !== 'Device ID') {
+      if (headers.includes('Device ID')) {
+        throw new Error('Device ID must be the final standard column in the Checkins sheet.');
+      }
+      sheet.getRange(1, deviceColumn).setValue('Device ID').setFontWeight('bold');
     }
   },
 
@@ -179,7 +192,9 @@ const DB = {
     const headers = data[0] || [];
     const sessionIndex = headers.indexOf('Session ID');
     const deviceIndex = headers.indexOf('Device ID');
-    if (sessionIndex === -1 || deviceIndex === -1) return null;
+    if (sessionIndex === -1 || deviceIndex === -1) {
+      throw new Error('Checkins sheet headers are invalid. Run workbook setup again.');
+    }
 
     for (let i = 1; i < data.length; i++) {
       if (data[i][sessionIndex] === sessionId && data[i][deviceIndex] === deviceHash) {

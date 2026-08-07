@@ -38,6 +38,7 @@ Follow these steps to verify the attendance system before production use.
 ## Edge Cases
 - [ ] **Missing QR Access:** Open the Web App URL with only `?session=...` and no `access` or `expires` values. Verify the app asks for a new live QR scan.
 - [ ] **Expired Shared Link:** Photograph a QR code, wait at least 30 seconds, and then scan the old image. Verify the app rejects it as expired.
+- [ ] **Multiple Accounts:** Sign in to two Google accounts in the main browser and scan a fresh QR. Verify the generated URL contains `authuser=0` and attempts to open using the primary account.
 - [ ] **Tampered Link:** Change one character in the `access` value. Verify the app rejects the link.
 - [ ] **Unauthorized QR Refresh:** From the student page console, call `google.script.run.withSuccessHandler(console.log).getRotatingQrData('TOKEN', 'INVALID')`. Verify the response says the admin QR display is not authorized.
 - [ ] **QR Rotation During Entry:** Scan a valid QR, wait for the admin QR to rotate, and complete attendance within five minutes. Verify the browser-bound grant still allows submission.
@@ -46,6 +47,9 @@ Follow these steps to verify the attendance system before production use.
 - [ ] **Same-Device Proxy:** Scan the current QR again in the same browser and enter a second valid roll number such as `CB.SC.U4CYS25049`. Verify the system says only one attendance is allowed per device for the session.
 - [ ] **Different-Device Duplicate:** Scan the current QR on another phone and enter `CB.SC.U4CYS25048`. Verify the original student's attendance is detected as a duplicate.
 - [ ] **Device Audit:** Verify successful `Checkins` rows contain a 64-character hash under `Device ID`, not the raw browser UUID.
+- [ ] **Browser Receipt:** After a successful check-in, rescan the current QR in the same browser. Verify the form does not reopen and the already-submitted message appears.
+- [ ] **Header Tampering:** Temporarily rename a required `Checkins` header and attempt attendance. Verify the server rejects the operation instead of bypassing duplicate checks, then restore the header.
+- [ ] **Invalid Deployment URL:** Put a `/dev`, editor, or Drive URL in `Public Web App URL`. Verify the admin menu refuses to generate a QR.
 - [ ] **Invalid Token:** Manually alter the `session` value in a fresh signed link. Verify the signature check rejects the modified link.
 - [ ] **Expired Session:** Manually edit `Closes At` to a past time. Verify the admin QR stops refreshing and a previously granted page cannot submit.
 - [ ] **Closed Session:** Use the custom menu to close the session. Verify the admin QR becomes unavailable and a previously granted page cannot submit.

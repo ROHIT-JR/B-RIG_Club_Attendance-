@@ -28,7 +28,7 @@ function initWorkbook() {
     { name: CONFIG.SHEETS.DASHBOARD, headers: ['S.No', 'Name', 'Roll No'] },
     { name: CONFIG.SHEETS.STUDENTS, headers: ['Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At', 'Created By', 'Notes'] },
     { name: CONFIG.SHEETS.SESSIONS, headers: ['Session ID', 'Session Date', 'Session Title', 'Opens At', 'Closes At', 'Status', 'Token', 'Created At', 'Created By'] },
-    { name: CONFIG.SHEETS.CHECKINS, headers: ['Checkin ID', 'Timestamp', 'Session ID', 'Session Date', 'Roll Number', 'Full Name', 'Result', 'Source', 'User Agent', 'Device ID'] },
+    { name: CONFIG.SHEETS.CHECKINS, headers: CONFIG.CHECKIN_HEADERS },
     { name: CONFIG.SHEETS.SETTINGS, headers: ['Setting', 'Value'] }
   ];
 
@@ -212,8 +212,11 @@ function showCurrentSessionQR(providedToken) {
   }
 
   const webAppUrl = getSetting('Public Web App URL');
-  if (!webAppUrl || webAppUrl === CONFIG.DEFAULT_SETTINGS['Public Web App URL']) {
-    SpreadsheetApp.getUi().alert('Please set the Public Web App URL in the Settings sheet first.');
+  if (!isValidWebAppUrl(webAppUrl)) {
+    SpreadsheetApp.getUi().alert(
+      'Set Public Web App URL to the active Apps Script deployment URL ending in /exec. ' +
+      'Do not use an editor, /dev, Google Drive, or deleted deployment link.'
+    );
     return;
   }
 
@@ -252,14 +255,15 @@ function getRotatingQrData(token, adminGrant) {
   }
 
   const webAppUrl = getSetting('Public Web App URL');
-  if (!webAppUrl || webAppUrl === CONFIG.DEFAULT_SETTINGS['Public Web App URL']) {
-    return { valid: false, error: 'The Public Web App URL is not configured.' };
+  if (!isValidWebAppUrl(webAppUrl)) {
+    return { valid: false, error: 'The production Web App URL is invalid. Configure the active /exec deployment URL.' };
   }
 
   const expiresAt = Date.now() + (CONFIG.ACCESS_CONTROL.QR_LIFETIME_SECONDS * 1000);
   const signature = signQrAccess_(token, expiresAt);
-  const separator = webAppUrl.includes('?') ? '&' : '?';
-  const url = `${webAppUrl}${separator}session=${encodeURIComponent(token)}` +
+  const baseWebAppUrl = webAppUrl.split('?')[0].replace(/\/$/, '');
+  const url = `${baseWebAppUrl}?authuser=${CONFIG.ACCESS_CONTROL.GOOGLE_ACCOUNT_SLOT}` +
+    `&session=${encodeURIComponent(token)}` +
     `&access=${encodeURIComponent(signature)}&expires=${expiresAt}`;
 
   return {
@@ -511,7 +515,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
       return { success: false, error: 'Session has expired.' };
     }
 
-    DB.ensureDeviceColumn();
+    DB.ensureCheckinSchema();
 
     // 2. Prevent repeat attendance by student or browser device.
     const existingCheckin = DB.getCheckin(session.sessionId, normalizedRollNo);
