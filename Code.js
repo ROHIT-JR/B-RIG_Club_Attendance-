@@ -203,11 +203,14 @@ function showCurrentSessionQR(providedToken) {
 
   const webAppUrl = getSetting('Public Web App URL');
   if (!webAppUrl || webAppUrl === CONFIG.DEFAULT_SETTINGS['Public Web App URL']) {
-    SpreadsheetApp.getUi().alert('Please set the Public Web App URL in the Settings sheet first.');
+    SpreadsheetApp.getUi().alert('Please set the Public Web App URL (Vercel URL) in the Settings sheet first.');
     return;
   }
 
-  const fullUrl = `${webAppUrl}?session=${token}`;
+  const scriptId = ScriptApp.getScriptId();
+  // We append both session token and scriptId so Vercel can dynamically embed the right script
+  const separator = webAppUrl.includes('?') ? '&' : '?';
+  const fullUrl = `${webAppUrl}${separator}session=${token}&id=${scriptId}`;
   
   const htmlTemplate = HtmlService.createTemplateFromFile('AdminSidebar');
   htmlTemplate.url = fullUrl;
@@ -248,11 +251,11 @@ function closeCurrentSession() {
 function doGet(e) {
   const template = HtmlService.createTemplateFromFile('Index');
   template.sessionToken = (e && e.parameter && e.parameter.session) ? e.parameter.session : '';
-  
-  return template
-    .evaluate()
-    .setTitle(getSetting('Club Name') + ' Attendance')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0');
+  return template.evaluate()
+    .setTitle(getSetting('Club Name') || 'Club Attendance')
+    .setFaviconUrl('https://avatars.githubusercontent.com/u/129193826?s=400&u=1fcd80a193fc7377208d6fb5a02686bcc8754f66&v=4')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 /**
