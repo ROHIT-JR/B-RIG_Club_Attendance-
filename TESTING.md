@@ -40,7 +40,8 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 - [ ] Run **Club Attendance > Setup / Initialise Workbook**.
 - [ ] `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings` exist.
 - [ ] Re-running setup preserves records except that formula-like historical `User Agent` cells are converted to safe text.
-- [ ] `Checkins` has the standard columns ending with `User Agent` and `Device ID`.
+- [ ] `Checkins` has exactly these first ten headers in order: `Checkin ID`, `Timestamp`, `Session ID`, `Session Date`, `Roll Number`, `Full Name`, `Result`, `Source`, `User Agent`, `Device ID`.
+- [ ] Apps Script Script Properties contains the `SPREADSHEET_ID` recorded by workbook setup.
 - [ ] `Student Web App URL` contains only the stable Vercel/custom root HTTPS origin.
 - [ ] `Club Name`, `Time zone`, default duration, and registration approval behavior are correct.
 - [ ] The Sheet time zone, `Settings > Time zone`, and `appsscript.json` `timeZone` match.
@@ -62,6 +63,7 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 
 - [ ] `GET /api/attendance` returns `405` and advertises POST.
 - [ ] A normal scan returns JSON through `/api/attendance`; it never redirects the browser to Google.
+- [ ] A fresh QR reaches the roll-entry screen, proving web-app execution can reopen the configured Sheet by ID.
 - [ ] Temporarily test a staging deployment with a wrong secret. The browser receives generic administrator guidance and no URL, secret, stack, or Google HTML.
 - [ ] Restore the correct secret and redeploy staging before continuing.
 - [ ] Confirm the Vercel function duration is 30 seconds and the proxy timeout is shorter than the browser timeout.

@@ -51,9 +51,49 @@ The browser bundle never contains the Apps Script URL or API secret. Apps Script
 
 Some managed Google Workspace domains prohibit anonymous Apps Script deployments. The administrator must use an account that permits **Who has access: Anyone**. This Google restriction affects the Vercel-to-Apps-Script backend connection, not student Google accounts.
 
-## Install
+## Step-by-Step Deployment
 
-### 1. Get the project
+Deploy the components in this order:
+
+```text
+Google Sheet and Apps Script source
+  -> Apps Script server secret
+  -> Apps Script /exec deployment
+  -> Vercel project and environment variables
+  -> stable Vercel/custom student URL
+  -> Settings sheet
+  -> end-to-end QR test
+```
+
+Do not generate a production QR until all steps are complete. Students must receive only the final Vercel or custom-domain URL.
+
+### Values you will create
+
+Keep this list available while deploying, but do not place real values in a tracked file:
+
+| Value | Created in | Used in |
+| --- | --- | --- |
+| Script ID | Apps Script Project Settings | Local `.clasp.json` only |
+| Spreadsheet ID | Workbook initialization | Apps Script `SPREADSHEET_ID`, created automatically |
+| API secret | Local cryptographic command | Apps Script and Vercel server settings |
+| Apps Script `/exec` URL | Apps Script deployment | Vercel `APPS_SCRIPT_URL` only |
+| Student app URL | Vercel deployment or custom domain | Sheet `Student Web App URL` |
+
+### Step 1: Verify local tools
+
+Open PowerShell, Terminal, or your Linux shell and run:
+
+```bash
+node --version
+npm --version
+git --version
+```
+
+Confirm that Node.js is version 20 or newer. Install a current Node.js LTS release from [nodejs.org](https://nodejs.org/) and Git from [git-scm.com](https://git-scm.com/downloads) if either command is missing.
+
+### Step 2: Download and test the project
+
+Clone the repository and install the exact locked dependencies:
 
 ```bash
 git clone https://github.com/ROHIT-JR/B-RIG_Club_Attendance-.git B-RIG_Club_Attendance
@@ -62,116 +102,261 @@ npm ci
 npm test
 ```
 
-`npm test` runs the Apps Script logic, architecture-boundary, and Vercel proxy tests.
+Do not continue until all tests pass. `npm test` checks Apps Script behavior, the Vercel proxy, security boundaries, QR validation, duplicate enforcement, and the removal of legacy student-hosting files.
 
-### 2. Connect a Google Sheet
+Optional security verification:
 
-1. Create a blank Google Sheet.
-2. Open **Extensions > Apps Script**.
-3. Open **Project Settings** and copy the Script ID.
-4. Enable the Google Apps Script API in the administrator account's Apps Script user settings.
-5. Create an untracked `.clasp.json` in the repository root:
-
-```json
-{"scriptId":"PASTE_YOUR_SCRIPT_ID_HERE","rootDir":"."}
+```bash
+npm audit
 ```
 
-6. Authenticate and upload the Apps Script files:
+The expected result is zero known dependency vulnerabilities.
+
+### Step 3: Create the Google Sheet and bound Apps Script project
+
+1. Sign in to the Google account that will own and administer attendance.
+2. Open [Google Sheets](https://sheets.google.com) and create a blank spreadsheet.
+3. Rename it to something recognizable, such as **B-RIG Club Attendance**.
+4. Open **File > Settings** and set the spreadsheet time zone to `Asia/Kolkata`.
+5. Select **Extensions > Apps Script**. Google creates a script project bound to the Sheet.
+6. In Apps Script, select **Project Settings** in the left sidebar.
+7. Copy the **Script ID**. This is not the deployment URL.
+8. Leave the Apps Script browser tab open.
+
+The repository manifest also uses `Asia/Kolkata`. If another zone is required, complete the time-zone alignment instructions under [Configuration](#configuration) before creating sessions.
+
+### Step 4: Enable the Apps Script API
+
+Clasp cannot upload files until the Apps Script API is enabled for the administrator account.
+
+1. Open [Apps Script user settings](https://script.google.com/home/usersettings).
+2. Turn on **Google Apps Script API**.
+3. Wait a few minutes if it was just enabled.
+4. Return to the local project directory.
+
+### Step 5: Connect Clasp to the bound project
+
+Create `.clasp.json` in the repository root with the Script ID copied in Step 3.
+
+macOS or Linux:
+
+```bash
+printf '%s\n' '{"scriptId":"PASTE_YOUR_SCRIPT_ID_HERE","rootDir":"."}' > .clasp.json
+```
+
+Windows PowerShell:
+
+```powershell
+'{"scriptId":"PASTE_YOUR_SCRIPT_ID_HERE","rootDir":"."}' | Set-Content -Encoding ASCII .clasp.json
+```
+
+Authenticate Clasp using the same administrator account that owns the Sheet:
 
 ```bash
 npx clasp login
+```
+
+Verify the upload boundary before pushing:
+
+```bash
+npx clasp status
+```
+
+The tracked Apps Script files should be:
+
+- `AdminSidebar.html`
+- `appsscript.json`
+- `Code.js`
+- `Config.js`
+- `Database.js`
+
+Upload them:
+
+```bash
 npx clasp push --force
 ```
 
-7. Refresh the Sheet.
-8. Select **Club Attendance > Setup / Initialise Workbook**.
+Return to the Apps Script editor and refresh it. Confirm the five files are present. Never commit `.clasp.json`; it is already ignored by Git.
 
-Initialization creates or upgrades these sheets without deleting existing settings or attendance records. It can rewrite formula-like historical `User Agent` cells as safe text:
+### Step 6: Initialize the workbook
 
-- `Attendance Dashboard`
-- `Students`
-- `Sessions`
-- `Checkins`
-- `Settings`
+1. Return to the Google Sheet and refresh the page.
+2. Wait for the **Club Attendance** menu to appear beside the standard Sheet menus.
+3. Select **Club Attendance > Setup / Initialise Workbook**.
+4. Approve the administrator authorization request if Google displays one.
+5. Wait for the **Workbook initialised successfully** alert.
+6. Confirm that the following tabs now exist: `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings`.
+7. Open `Checkins` and confirm the exact ordered headers are `Checkin ID`, `Timestamp`, `Session ID`, `Session Date`, `Roll Number`, `Full Name`, `Result`, `Source`, `User Agent`, and `Device ID`.
+8. Open `Settings` and confirm that `Student Web App URL` exists. Leave its placeholder unchanged until Vercel is deployed.
+9. Return to Apps Script **Project Settings > Script Properties** and confirm setup created `SPREADSHEET_ID`.
 
-Do not rename required sheets or standard headers. `.clasp.json` identifies the Apps Script project and must not be committed.
+Initialization is safe to rerun when upgrading. It appends missing settings and headers without deleting attendance records, although it neutralizes formula-like historical `User Agent` values as safe text. It does not rearrange a damaged schema, so always verify the exact `Checkins` order after a repair. Do not rename required tabs or standard headers.
 
-### 3. Create the shared server secret
+`SPREADSHEET_ID` lets the deployed web app open the bound workbook when Google provides no active spreadsheet context. Do not copy an ID from another workbook or delete this property in production. Setup can append a missing header, but it cannot safely repair a renamed or reordered standard column; compare the full order above before deployment.
 
-Generate a random secret of at least 32 characters. This cross-platform Node.js command creates a 64-character value:
+If the custom menu does not appear, refresh the Sheet once more. If it is still absent, confirm `npx clasp push --force` succeeded, open Apps Script, run `onOpen` once as the administrator, and refresh the Sheet.
+
+### Step 7: Generate and store the server secret
+
+Generate a random 64-character secret locally:
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Store the same value in both server environments:
+Copy the generated value without adding spaces or quotation marks. In Apps Script:
 
-1. In Apps Script, open **Project Settings > Script Properties**.
-2. Add a property named `VERCEL_API_SECRET` with the generated value.
-3. Keep the value available temporarily for the Vercel configuration step.
+1. Open **Project Settings**.
+2. Scroll to **Script Properties**.
+3. Select **Add script property**.
+4. Enter `VERCEL_API_SECRET` as the property name.
+5. Paste the generated value as the property value.
+6. Select **Save script properties**.
 
-Do not put the value in `.env.example`, source files, browser code, URLs, a Sheet cell, screenshots, issue reports, or Git history.
+Keep the value available only until the matching Vercel variable is configured. Do not put it in `.env.example`, source code, browser code, URLs, Sheet cells, screenshots, chat messages, issue reports, or Git history.
 
-### 4. Deploy Apps Script as the backend
+`QR_SIGNING_SECRET` is created automatically by Apps Script on first use. Do not manually create or copy it.
 
-1. In Apps Script, select **Deploy > New deployment**.
-2. Choose **Web app**.
-3. Set **Execute as** to **Me**.
-4. Set **Who has access** to **Anyone**.
-5. Deploy and complete administrator authorization.
-6. Copy the production URL matching `https://script.google.com/macros/s/DEPLOYMENT_ID/exec`.
+### Step 8: Deploy Apps Script as the backend
 
-The `/exec` URL is a backend credential-like configuration value. Give it only to administrators and Vercel. Never put it in the student URL or the `Student Web App URL` Sheet setting.
+1. In the Apps Script editor, select **Deploy > New deployment**.
+2. Select the gear icon beside **Select type**.
+3. Choose **Web app**.
+4. Enter a description such as `B-RIG production API`.
+5. Set **Execute as** to **Me**.
+6. Set **Who has access** to **Anyone**.
+7. Select **Deploy**.
+8. Complete administrator authorization if prompted.
+9. Copy the Web App URL ending in `/exec`.
 
-Opening the `/exec` URL directly should return JSON similar to:
+The URL must match this shape:
+
+```text
+https://script.google.com/macros/s/DEPLOYMENT_ID/exec
+```
+
+Open the `/exec` URL from a signed-out browser or an unauthenticated HTTP client. The deployment route should return JSON similar to:
 
 ```json
 {"ok":true,"service":"B-RIG Attendance API","studentFrontend":"external"}
 ```
 
-### 5. Deploy the student app on Vercel
+This static response confirms that anonymous `doGet()` routing works. It does not test the Sheet connection, API secret, or Vercel proxy; Step 13 performs that verification. If Google shows an authorization or access error, verify the deployment settings before continuing. The `/exec` URL is backend configuration. Give it only to administrators and Vercel; never put it in a QR or the Sheet's `Student Web App URL` setting.
 
-Import the repository into Vercel and configure:
+### Step 9: Import the Vercel project
 
-| Vercel option | Value |
-| --- | --- |
-| Framework preset | Other |
-| Root Directory | `vercel` |
-| Build command | Leave empty |
-| Output directory | Leave empty |
+1. Push the repository to GitHub if it is not already available there.
+2. Sign in to [Vercel](https://vercel.com).
+3. Select **Add New > Project**.
+4. Import `ROHIT-JR/B-RIG_Club_Attendance-` or your fork.
+5. Set the production branch to `main` if Vercel asks.
+6. Choose **Other** for **Framework Preset**.
+7. Select **Edit** beside **Root Directory** and enter `vercel`.
+8. Leave **Build Command** empty.
+9. Leave **Output Directory** empty.
+10. Expand **Environment Variables** before deploying.
 
-Add these server-side environment variables for Production:
+Add both variables exactly as shown:
 
-| Variable | Value |
-| --- | --- |
-| `APPS_SCRIPT_URL` | The Apps Script production `/exec` URL |
-| `APPS_SCRIPT_API_SECRET` | The exact value stored as `VERCEL_API_SECRET` |
+| Variable | Value | Required scope |
+| --- | --- | --- |
+| `APPS_SCRIPT_URL` | The production Apps Script `/exec` URL from Step 8 | Production |
+| `APPS_SCRIPT_API_SECRET` | The exact secret stored as `VERCEL_API_SECRET` | Production |
 
-Add the variables to Preview too only if preview deployments will be used for attendance testing. Redeploy after adding or changing environment variables.
+Variable names are case-sensitive. Do not add a `NEXT_PUBLIC_` prefix. Select **Deploy** after both variables are present.
 
-The stable student address must be a root HTTPS origin, for example:
+If variables are added after the first deployment, open **Project Settings > Environment Variables**, add or correct them, then redeploy from the **Deployments** tab. Existing deployments do not automatically receive later environment changes.
+
+Add the variables to Preview only when preview deployments will be used for controlled testing. Production attendance should use the stable production deployment.
+
+### Step 10: Select the permanent student URL
+
+After deployment, Vercel provides a stable production URL such as:
 
 ```text
 https://b-rig-attendance.vercel.app
-https://attendance.example.edu
 ```
 
-Paths, query strings, fragments, HTTP URLs, numeric hosts, Google-hosted URLs, and GitHub Pages hosts are not accepted for QR generation. A root preview origin can pass format validation but is not stable; do not configure a deployment-specific preview URL. A custom domain is supported when it points to the Vercel project root.
+Open the URL. The page should load the B-RIG interface and explain that a fresh QR is required because no session parameters were supplied. A direct GET to `/api/attendance` returning `405 Method Not Allowed` is expected because that endpoint accepts POST only.
 
-The function includes warm-instance request limits. For distributed production enforcement, also configure a Vercel Firewall rate-limit rule for POST requests to `/api/attendance`. Choose a limit that accommodates many students behind the same campus NAT address; monitor normal meeting traffic before tightening it.
+For a custom domain:
 
-### 6. Connect QR generation to Vercel
+1. In Vercel, open **Project Settings > Domains**.
+2. Add the domain, such as `attendance.example.edu`.
+3. Apply the DNS records Vercel provides.
+4. Wait until Vercel reports the domain as valid and HTTPS is active.
+5. Open the custom root URL and confirm the same student page appears.
 
-In the Sheet's `Settings` tab, set `Student Web App URL` to the stable Vercel or custom root origin. Do not paste the Apps Script `/exec` URL.
+Use only one stable root HTTPS origin. Do not use a path, query string, fragment, HTTP URL, numeric host, Google application host, GitHub Pages host, or deployment-specific preview URL.
 
-Refresh the Sheet and select **Club Attendance > Create New Attendance Session**. Decode or scan the displayed QR and confirm:
+### Step 11: Configure the Sheet to generate Vercel QR links
 
-- The hostname is the configured Vercel or custom hostname.
-- The only attendance parameters are `session`, `access`, and `expires`.
-- No URL includes `script.google.com`, `authuser`, GitHub Pages, or `qr.html`.
-- A student with multiple Google accounts signed in reaches the student form without a Google page.
+1. Return to the Google Sheet.
+2. Open the `Settings` tab.
+3. Find the `Student Web App URL` row.
+4. Replace the placeholder with the stable Vercel or custom root URL from Step 10.
+5. Do not add a trailing path or any query parameters.
+6. Do not paste the Apps Script `/exec` URL.
+7. Set `Club Name` to the name students should see.
+8. Confirm `Time zone` matches both the Sheet and `appsscript.json`.
+9. Set `New registrations require approval` to `TRUE` or `FALSE` as required.
+10. Set the default attendance duration in minutes.
 
-Complete the production checklist in [`TESTING.md`](TESTING.md) before using the system at a meeting.
+Only trusted administrators should be able to edit `Settings`, because the configured student origin becomes the destination encoded in new QR codes.
+
+### Step 12: Configure production rate limiting
+
+The proxy contains per-instance limits, but a distributed production deployment should also use Vercel Firewall or another durable rate-limit service.
+
+1. Open the Vercel project's security or firewall settings.
+2. Create a rate-limit rule for requests whose path is `/api/attendance`.
+3. Restrict the rule to `POST` when the interface permits method matching.
+4. Start with a threshold that allows the expected meeting size.
+5. Remember that many students may share one campus NAT IP address.
+6. Test the rule in a preview or staging deployment before enforcing a lower production limit.
+7. Monitor legitimate traffic during the first meeting and adjust conservatively.
+
+Vercel product names and firewall availability vary by account plan. If distributed firewall rules are unavailable, retain the built-in limits and document the remaining quota-abuse risk.
+
+### Step 13: Run the first end-to-end check-in
+
+Prefer a separate staging Sheet, Apps Script deployment, and Vercel Preview for destructive or repeated testing. A completed production smoke test creates a permanent session, dashboard column, check-in, and possibly a student. There is no per-session cleanup command. If production must be tested directly, use an approved test identity, label the session clearly, close it, and retain the records as an audit trail. Never use the global reset command merely to remove one smoke test.
+
+1. Refresh the Google Sheet.
+2. Select **Club Attendance > Create New Attendance Session**.
+3. Enter a session title, such as `Deployment smoke test`.
+4. Enter a short duration, such as `10` minutes.
+5. Wait for the rotating QR dialog.
+6. Scan the QR with a phone's normal Chrome, Safari, Firefox, or Samsung Internet browser.
+7. Confirm the browser stays on the Vercel or custom student hostname.
+8. Confirm no Google account chooser, Google Drive page, Apps Script page, or GitHub redirect appears.
+9. Enter a valid test roll such as `CB.SC.U4CYS25048`.
+10. Complete registration or confirm the existing test student.
+11. Verify the success screen appears.
+12. In `Checkins`, verify one row was created with a 64-character hashed `Device ID`.
+13. In `Attendance Dashboard`, verify the student is marked `P` for the session.
+14. Rescan from the same browser and confirm the already-submitted state appears.
+15. Select **Club Attendance > Close Current Session**.
+16. Confirm a previously opened form can no longer submit.
+
+Decode one generated QR and verify that its hostname is the student hostname and its parameters are only `session`, `access`, and `expires`. It must not contain `script.google.com`, `authuser`, GitHub Pages, or `qr.html`.
+
+Repeat the scan while multiple Google accounts are signed in on the phone. The result must be identical because the student browser never opens Google.
+
+### Step 14: Complete production acceptance
+
+Run every applicable item in [`TESTING.md`](TESTING.md), including mobile layout, expiry, tampering, duplicate rolls, same-device blocking, registration approval, transient failures, simultaneous submissions, legacy URL removal, and multi-account access.
+
+Do not use the system for a live meeting until:
+
+- The Apps Script status route is anonymously reachable and is understood to be a routing check only.
+- The production Vercel deployment has both environment variables.
+- `Student Web App URL` contains the stable student origin.
+- A fresh QR reaches the roll-entry screen, proving the Vercel proxy can read the configured Sheet.
+- A real phone completes an end-to-end check-in.
+- A decoded QR contains no Google or legacy redirect hostname.
+- Administrators know how to close a session and recover the QR dialog.
+- A backup and rollback plan exists.
 
 ## Configuration
 
@@ -188,7 +373,7 @@ Complete the production checklist in [`TESTING.md`](TESTING.md) before using the
 
 `Public Web App URL` is a migration-only fallback for an older installation. An old Apps Script, GitHub Pages, or path-based value is rejected. Configure `Student Web App URL` and remove operational dependence on the legacy row.
 
-Only trusted administrators should be able to edit `Settings`. QR generation intentionally trusts the configured custom student origin after validating that it is a root HTTPS domain and not Google-hosted.
+Only trusted administrators should be able to edit `Settings`. QR generation intentionally trusts the configured custom student origin after validating that it is a root HTTPS domain and not a known Google application host.
 
 The configured `Time zone`, `appsscript.json` `timeZone`, and the Google Sheet time zone under **File > Settings** must match. The repository defaults to `Asia/Kolkata`. To use another zone, update all three locations, upload the manifest, and publish a new Apps Script version before creating sessions.
 
@@ -198,6 +383,7 @@ When registration approval is enabled, the first check-in is recorded and the ne
 
 | Location | Name | Visibility |
 | --- | --- | --- |
+| Apps Script Script Properties | `SPREADSHEET_ID` | Generated by workbook setup, server only |
 | Apps Script Script Properties | `VERCEL_API_SECRET` | Server only |
 | Vercel environment | `APPS_SCRIPT_URL` | Server only |
 | Vercel environment | `APPS_SCRIPT_API_SECRET` | Server only |
@@ -262,31 +448,196 @@ In-memory proxy rate limits apply per warm Vercel function instance. They reduce
 | `Show Current QR Code` | Reopens the latest open session QR |
 | `Close Current Session` | Stops further check-ins |
 | `Reset / Clear All Sessions` | Deletes session and check-in history but keeps students |
-| `Setup / Initialise Workbook` | Adds missing sheets, headers, and settings safely |
+| `Setup / Initialise Workbook` | Creates sheets and appends missing configuration; verify ordered headers afterward |
 
-The reset action cannot be undone. Make a Sheet copy before clearing production data. The lock prevents concurrent writes but Google Sheets does not provide multi-range transactions; if a reset operation fails partway through, inspect the workbook and rerun reset from the backup or a known state.
+### Before each meeting
+
+1. Open the production Sheet with the administrator account.
+2. Open `Settings` and confirm `Student Web App URL` still matches the production Vercel/custom origin.
+3. Open the production student URL directly and confirm the page loads. This checks static hosting only, not the API or Sheet.
+4. Inspect `Sessions` for a stale row whose `Status` is `Open`.
+5. Close stale sessions with **Club Attendance > Close Current Session**. Repeat the command if more than one stale Open row exists.
+6. Confirm the device used to display the QR has a stable network connection.
+7. Tell students to scan with their normal browser rather than a private tab or scanner WebView.
+
+Do not edit a session's `Status` directly while check-ins may be in flight. The menu action coordinates closure with attendance writes through `LockService`.
+
+### Open and display attendance
+
+1. Select **Club Attendance > Create New Attendance Session**.
+2. Enter a title that uniquely identifies the meeting.
+3. Enter the attendance duration in minutes.
+4. Wait for the QR dialog to show **Session live**.
+5. Scan one fresh QR on an administrator test phone and stop at the roll-entry screen without submitting. This verifies the proxy, secret, Apps Script deployment, and Sheet connection without creating a check-in.
+6. Project or display the live dialog without photographing or distributing it.
+7. Keep the dialog open while attendance is being collected. Its QR rotates automatically.
+8. If the dialog is closed accidentally, select **Club Attendance > Show Current QR Code**.
+9. If the dialog shows **Reconnecting**, wait for automatic recovery or reopen it after checking the administrator connection.
+
+### Monitor submissions
+
+1. Watch `Checkins` for new rows.
+2. Confirm `Attendance Dashboard` changes the correct session marker from `A` to `P`.
+3. Do not sort, rename, or reorder standard columns while attendance is open.
+4. Investigate repeated errors before asking students to retry many times.
+5. If Vercel reports rate limiting, wait for the one-minute window and inspect whether a firewall rule is too restrictive for the shared campus IP.
+
+### Approve a pending registration
+
+When `New registrations require approval` is `TRUE`, the student's first attendance is recorded but future sessions require approval:
+
+1. Open `Students`.
+2. Find the row by normalized roll number.
+3. Verify the submitted full name through the club's normal identity process.
+4. Change `Status` from `Pending` to `Active` to approve the student.
+5. Use `Inactive` only when future attendance must be blocked.
+6. Do not change the roll-number format or standard column names.
+
+### Close attendance
+
+1. Select **Club Attendance > Close Current Session** as soon as the attendance window ends.
+2. Confirm the success alert appears.
+3. Verify the latest row in `Sessions` now has `Status` set to `Closed`.
+4. Confirm a previously open student form can no longer submit.
+5. Close the QR dialog and stop displaying it.
+6. Review the dashboard and check-in count before treating the session as final.
+
+### Reset test data
+
+Use **Reset / Clear All Sessions** only in a disposable or backed-up workbook. The action deletes all session history, check-ins, and dashboard session columns while retaining students and settings.
+
+A copied Sheet is a data snapshot, not an automatic production replacement. Normal recovery copies required data back into the original workbook so the existing Apps Script project, Script Properties, deployment URL, and Vercel configuration remain valid. Promoting the copied workbook itself requires repeating the Clasp binding, setup, Script Properties, Apps Script deployment, Vercel URL update, and verification steps.
+
+1. Select **File > Make a copy** and verify the backup opens.
+2. Confirm no attendance session is active.
+3. Select **Club Attendance > Reset / Clear All Sessions**.
+4. Read the warning and select **Yes** only when the target workbook is correct.
+5. Verify `Sessions` and `Checkins` retain headers but contain no data rows.
+6. Verify dashboard student columns remain and session columns are removed.
+
+The reset action cannot be undone. The lock prevents concurrent writes, but Google Sheets does not provide multi-range transactions. If reset fails partway through, stop using that workbook and recover from the backup or a known state.
 
 ## Updating
 
-Run tests before every deployment:
+### Step 1: Prepare and test the update
+
+1. Close active attendance sessions.
+2. Make a copy of the production Sheet.
+3. Record the current Apps Script deployment version and Vercel production deployment.
+4. Pull the target branch and install its locked dependencies:
 
 ```bash
 git pull
 npm ci
 npm test
+npm audit
 ```
 
-For Apps Script changes:
+Do not deploy unless tests pass and the audit result is understood.
+
+Treat the Sheet copy as a data backup. Restoring into the original workbook preserves its bound Apps Script project and deployment. Promoting the copy as production requires a new Clasp binding, Script Properties, Apps Script deployment, Vercel environment update, and redeployment.
+
+### Step 2: Upload Apps Script changes
+
+Check the upload boundary and push the source:
 
 ```bash
+npx clasp status
 npx clasp push --force
 ```
 
-Then select **Deploy > Manage deployments**, edit the existing web app, choose **New version**, and deploy. `clasp push` updates source but does not change an existing versioned `/exec` deployment. Keeping the same deployment preserves `APPS_SCRIPT_URL`.
+Then publish the uploaded source:
 
-For frontend or proxy changes, deploy the updated commit through Vercel. Run **Setup / Initialise Workbook** once after an update that adds settings or headers. Setup also neutralizes formula-like values left in the historical `User Agent` column by older deployments.
+1. Open the bound Apps Script project.
+2. Select **Deploy > Manage deployments**.
+3. Select the pencil icon for the production web app.
+4. Under **Version**, choose **New version**.
+5. Add a short deployment description.
+6. Confirm **Execute as: Me** and **Who has access: Anyone**.
+7. Select **Deploy**.
+8. Confirm the `/exec` URL still returns the status JSON, remembering that this checks routing rather than Sheet access.
 
-To rotate the API secret, generate a new value and update both `VERCEL_API_SECRET` and `APPS_SCRIPT_API_SECRET` during a short maintenance window, then redeploy Vercel. A mismatch causes temporary API failure but does not expose either value.
+`clasp push` alone does not update a versioned web deployment. Reusing the existing deployment keeps the `/exec` URL stable. If the URL changes because a new deployment was created, update `APPS_SCRIPT_URL` in Vercel and redeploy.
+
+### Step 3: Deploy Vercel changes
+
+1. Merge or push the approved commit to the Vercel production branch.
+2. Open the Vercel project and watch the new production deployment.
+3. Confirm deployment status is **Ready**.
+4. Confirm both server environment variables remain configured for Production.
+5. Open the stable student origin and confirm the interface loads.
+6. Verify security or firewall rules still cover `/api/attendance`.
+
+If automatic Git deployments are disabled, open **Deployments**, select the deployment built from the approved commit, and promote or redeploy it to Production.
+
+### Step 4: Apply workbook upgrades
+
+1. Refresh the Google Sheet.
+2. Select **Club Attendance > Setup / Initialise Workbook** once.
+3. Confirm the expected sheets, headers, settings, and existing records remain present.
+4. Confirm `Student Web App URL` was not replaced.
+
+Setup also neutralizes formula-like values left in the historical `User Agent` column by older deployments.
+
+### Step 5: Verify the release
+
+1. Create a short, clearly labeled validation session.
+2. Scan the live QR from a real phone.
+3. Confirm the hostname is still the production student origin.
+4. Reach the roll-entry screen. This non-mutating step verifies Vercel, the shared secret, Apps Script, and Sheet access.
+5. Complete a full check-in only in staging or when an approved production validation record may be retained.
+6. If a check-in was completed, verify the Sheet write and dashboard marker.
+7. Close the session.
+8. Complete any release-specific items in [`TESTING.md`](TESTING.md).
+
+Do not run the global reset command to remove one validation session. Production validation sessions and dashboard columns should remain as labeled audit records unless an administrator performs a separately reviewed data correction.
+
+### Rotate the API secret
+
+Secret rotation causes a brief mismatch unless a dual-secret service is introduced, so use a maintenance window:
+
+1. Close active sessions.
+2. Generate a new secret using the command from deployment Step 7.
+3. Replace `VERCEL_API_SECRET` in Apps Script Script Properties.
+4. Replace `APPS_SCRIPT_API_SECRET` in every Vercel environment that targets this Apps Script deployment, including Production, Preview, or custom environments.
+5. Redeploy each affected Vercel environment so its function receives the new value.
+6. Confirm the Apps Script status route.
+7. Create a short, clearly labeled validation session.
+8. Scan its fresh QR until the roll-entry screen appears.
+9. Close the validation session.
+10. Remove the temporary local copy of the secret.
+
+Never place the old or new value in Git while rotating it.
+
+### Rotate the QR signing secret after an incident
+
+Routine QR-secret rotation is unnecessary because links expire after 25 seconds, but rotate it if `QR_SIGNING_SECRET` may have been exposed:
+
+1. Close every open attendance session.
+2. Wait at least five minutes for previously issued access grants to expire, or keep all affected sessions closed permanently.
+3. Open Apps Script **Project Settings > Script Properties**.
+4. Delete only `QR_SIGNING_SECRET`. Do not delete `SPREADSHEET_ID` or `VERCEL_API_SECRET`.
+5. Create a new test attendance session and open its QR dialog. Apps Script generates a new signing secret automatically.
+6. Confirm `QR_SIGNING_SECRET` reappears in Script Properties.
+7. Scan a newly generated QR and verify it reaches the roll-entry screen.
+8. Close the new validation session.
+9. Keep all sessions that displayed QR codes under the compromised secret closed.
+
+### Roll back a failed release
+
+1. Close any session created by the failed release.
+2. Decide whether environment variables changed in the failed release.
+3. For a code-only Vercel rollback, use Vercel's rollback action on the last known-good production deployment.
+4. If secrets or `APPS_SCRIPT_URL` changed, do not blindly restore a deployment containing stale environment values. Redeploy the known-good commit with the current correct variables instead.
+5. In Apps Script **Deploy > Manage deployments**, edit the production deployment and select the previous known-good version.
+6. Deploy that Apps Script version.
+7. Restore data into the original Sheet only if the failed release corrupted data; do not overwrite valid attendance unnecessarily.
+8. If the copied Sheet must become production, repeat the binding and deployment process and update Vercel to its new Apps Script `/exec` URL.
+9. Verify the static Apps Script status route.
+10. Create a short rollback-validation session and scan its QR until the roll-entry screen appears.
+11. Close the rollback-validation session.
+12. After a Vercel instant rollback, use **Undo Rollback** when the repaired deployment is ready, or explicitly promote that repaired deployment to Production. A normal Git build alone does not leave rollback mode or restore automatic production-domain assignment.
+13. Record the rollback, environment state, and failed commit for later investigation.
 
 ## Legacy Upgrade
 
@@ -326,7 +677,9 @@ Check the following without exposing values in screenshots or logs:
 2. Apps Script is deployed as **Execute as: Me** and **Who has access: Anyone**.
 3. `APPS_SCRIPT_API_SECRET` exactly matches the `VERCEL_API_SECRET` Script Property.
 4. Vercel was redeployed after environment changes.
-5. The Apps Script `/exec` URL returns the status JSON when opened by an administrator.
+5. `SPREADSHEET_ID` exists in Apps Script Script Properties and belongs to the production workbook.
+6. The Apps Script `/exec` URL returns static status JSON from a signed-out client.
+7. A fresh QR reaches the roll-entry screen; this is the check that proves Sheet access and proxy authentication.
 
 ### The browser reports too many requests
 
@@ -354,7 +707,17 @@ Enable the Google Apps Script API in the administrator account's Apps Script use
 
 ### Check-in schema validation fails
 
-Do not reorder standard `Checkins` columns. Run **Setup / Initialise Workbook** to append a missing `Device ID` column. Restore renamed or reordered headers manually before accepting attendance.
+The first ten `Checkins` headers must be exactly `Checkin ID`, `Timestamp`, `Session ID`, `Session Date`, `Roll Number`, `Full Name`, `Result`, `Source`, `User Agent`, and `Device ID` in that order. Setup can append a missing final `Device ID`, but a renamed, deleted, duplicated, or reordered earlier column requires manual restoration before attendance can resume.
+
+### Apps Script cannot find the attendance workbook
+
+1. Open the original bound Google Sheet.
+2. Select **Club Attendance > Setup / Initialise Workbook**.
+3. Open Apps Script **Project Settings > Script Properties**.
+4. Confirm `SPREADSHEET_ID` now exists.
+5. Do not copy the ID from a backup workbook unless that workbook is being fully promoted with a new Apps Script and Vercel deployment.
+6. Publish a new Apps Script version if the runtime code was also updated.
+7. Scan a fresh QR and confirm the roll-entry screen appears.
 
 ## Project Structure
 
