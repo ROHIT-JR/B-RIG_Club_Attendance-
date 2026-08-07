@@ -113,14 +113,28 @@ function hashDeviceId(deviceId) {
  */
 function isValidStudentAppUrl(url) {
   const value = String(url || '').trim();
-  const match = value.match(/^https:\/\/([A-Za-z0-9.-]+)(?::\d+)?(?:\/[^\s#]*)?$/);
+  const match = value.match(/^https:\/\/([A-Za-z0-9.-]+)(?::(\d{1,5}))?\/?$/);
   if (!match) return false;
 
   const hostname = match[1].toLowerCase();
+  const port = match[2] ? Number(match[2]) : null;
+  const labels = hostname.split('.');
+  if (hostname.length > 253 || labels.length < 2 || labels.some(label =>
+    !label || label.length > 63 || label.startsWith('-') || label.endsWith('-')
+  )) return false;
+  if (port !== null && (port < 1 || port > 65535)) return false;
+  if (labels.every(label => /^(?:\d+|0x[0-9a-f]+)$/i.test(label))) return false;
+
   const blockedHosts = [
-    'script.google.com',
-    'script.googleusercontent.com',
-    'drive.google.com'
+    'google.com',
+    'googleusercontent.com',
+    'googleapis.com',
+    'gstatic.com',
+    'withgoogle.com',
+    'appspot.com',
+    'firebaseapp.com',
+    'web.app',
+    'github.io'
   ];
   return !blockedHosts.some(host => hostname === host || hostname.endsWith('.' + host));
 }
@@ -161,8 +175,8 @@ function getSetting(key) {
  */
 function getStudentAppUrl() {
   const studentUrl = getSetting('Student Web App URL');
-  if (isValidStudentAppUrl(studentUrl)) return String(studentUrl).trim();
+  if (isValidStudentAppUrl(studentUrl)) return String(studentUrl).trim().replace(/\/$/, '');
 
   const legacyUrl = getSetting('Public Web App URL');
-  return isValidStudentAppUrl(legacyUrl) ? String(legacyUrl).trim() : '';
+  return isValidStudentAppUrl(legacyUrl) ? String(legacyUrl).trim().replace(/\/$/, '') : '';
 }

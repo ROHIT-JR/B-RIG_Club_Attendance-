@@ -2,7 +2,17 @@
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_UPSTREAM_BYTES = 32 * 1024;
-const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const MAX_RATE_LIMIT_BUCKETS = 5_000;
+const DEFAULT_RATE_LIMITS = {
+  perIp: 600,
+  perDeviceAction: {
+    sessionDetails: 12,
+    validateRoll: 30,
+    submitAttendance: 10
+  }
+};
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
 
 const ACTION_SCHEMAS = {
@@ -59,6 +69,32 @@ function sendJson(res, statusCode, body, additionalHeaders) {
     res.setHeader(name, value);
   }
   res.end(JSON.stringify(body));
+}
+
+function getClientIp(req) {
+  const forwarded = getHeader(req.headers, 'x-vercel-forwarded-for') ||
+    getHeader(req.headers, 'x-forwarded-for') ||
+    getHeader(req.headers, 'x-real-ip') ||
+    'unknown';
+  return String(forwarded).split(',', 1)[0].trim().slice(0, 64) || 'unknown';
+}
+
+function consumeRateLimit(store, key, limit, now) {
+  const current = store.get(key);
+  if (!current || now >= current.resetAt) {
+    if (!current && store.size >= MAX_RATE_LIMIT_BUCKETS) {
+      const oldestKey = store.keys().next().value;
+      if (oldestKey !== undefined) store.delete(oldestKey);
+    }
+    store.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return null;
+  }
+
+  if (current.count >= limit) {
+    return Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+  }
+  current.count += 1;
+  return null;
 }
 
 function parseJsonBody(body) {
@@ -160,6 +196,16 @@ function redactSensitiveJson(value, sensitiveValues) {
 function createHandler(options = {}) {
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const env = options.env || process.env;
+  const rateLimitStore = options.rateLimitStore || new Map();
+  const rateLimits = {
+    ...DEFAULT_RATE_LIMITS,
+    ...(options.rateLimits || {}),
+    perDeviceAction: {
+      ...DEFAULT_RATE_LIMITS.perDeviceAction,
+      ...((options.rateLimits && options.rateLimits.perDeviceAction) || {})
+    }
+  };
+  const nowImpl = options.nowImpl || Date.now;
   const timeoutMs = Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
     ? options.timeoutMs
     : DEFAULT_TIMEOUT_MS;
@@ -218,7 +264,32 @@ function createHandler(options = {}) {
     const appsScriptUrl = typeof env.APPS_SCRIPT_URL === 'string' ? env.APPS_SCRIPT_URL.trim() : '';
     const apiSecret = typeof env.APPS_SCRIPT_API_SECRET === 'string' ? env.APPS_SCRIPT_API_SECRET : '';
     if (!APPS_SCRIPT_URL_PATTERN.test(appsScriptUrl) || apiSecret.length < 32) {
-      sendJson(res, 500, { error: 'Server configuration error.' });
+      sendJson(res, 500, {
+        error: 'Attendance is temporarily unavailable. Contact the club administrator.',
+        retryable: false
+      });
+      return;
+    }
+
+    const now = nowImpl();
+    const clientIp = getClientIp(req);
+    const ipRetryAfter = consumeRateLimit(rateLimitStore, `ip:${clientIp}`, rateLimits.perIp, now);
+    const actionRetryAfter = ipRetryAfter === null
+      ? consumeRateLimit(
+          rateLimitStore,
+          `device:${clientIp}:${payload.deviceId}:${payload.action}`,
+          rateLimits.perDeviceAction[payload.action],
+          now
+        )
+      : null;
+    const retryAfter = ipRetryAfter === null ? actionRetryAfter : ipRetryAfter;
+    if (retryAfter !== null) {
+      sendJson(
+        res,
+        429,
+        { error: 'Too many attendance requests. Wait a moment and try again.' },
+        { 'Retry-After': String(retryAfter) }
+      );
       return;
     }
 
@@ -279,6 +350,14 @@ function createHandler(options = {}) {
         return;
       }
 
+      if (upstreamBody.success === false && upstreamBody.error === 'Request could not be processed.') {
+        sendJson(res, 502, {
+          error: 'Attendance is temporarily unavailable. Contact the club administrator.',
+          retryable: false
+        });
+        return;
+      }
+
       sendJson(res, 200, redactSensitiveJson(upstreamBody, [apiSecret, appsScriptUrl]));
     } catch (error) {
       sendJson(
@@ -297,3 +376,4 @@ const handler = createHandler();
 module.exports = handler;
 module.exports.createHandler = createHandler;
 module.exports.MAX_BODY_BYTES = MAX_BODY_BYTES;
+module.exports.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;

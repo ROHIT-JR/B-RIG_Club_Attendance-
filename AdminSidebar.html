@@ -4,12 +4,16 @@
     <base target="_top">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
+      integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU"
+      crossorigin="anonymous"
+    ></script>
     <style>
       :root {
         --ink: #102522;
         --muted: #637570;
-        --primary: #238b7e;
+        --primary: #176f65;
         --surface: #f4f8f7;
         --border: #dce8e5;
       }
@@ -155,12 +159,12 @@
         <p class="eyebrow">B-RIG attendance</p>
         <h1>Session QR code</h1>
       </div>
-      <div class="live-badge" id="live-badge">Session live</div>
+      <div class="live-badge" id="live-badge" role="status" aria-live="polite">Session live</div>
     </header>
 
     <main>
       <div class="qr-card">
-        <div id="qrcode-container" aria-label="Rotating attendance QR code">Generating secure QR...</div>
+        <div id="qrcode-container" role="status" aria-live="polite" aria-label="Rotating attendance QR code">Generating secure QR...</div>
       </div>
 
       <div class="qr-status">
@@ -182,50 +186,82 @@
       const liveBadge = document.getElementById('live-badge');
       let expiresAt = 0;
       let refreshTimer = null;
+      let refreshWatchdog = null;
+      let requestSequence = 0;
 
       function updateCountdown() {
+        if (!expiresAt) return;
         const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
-        countdown.textContent = seconds > 0 ? `Expires in ${seconds}s` : 'Refreshing...';
+        if (seconds > 0) {
+          countdown.textContent = `Expires in ${seconds}s`;
+          return;
+        }
+
+        expiresAt = 0;
+        qrContainer.textContent = 'Generating a fresh QR...';
+        countdown.textContent = 'Refreshing...';
+        liveBadge.textContent = 'Refreshing';
       }
 
-      function showQrError(message) {
+      function showQrError(message, retryable) {
         window.clearTimeout(refreshTimer);
+        window.clearTimeout(refreshWatchdog);
+        expiresAt = 0;
         qrContainer.innerHTML = '';
         const error = document.createElement('div');
         error.className = 'error-message';
         error.textContent = message;
         qrContainer.appendChild(error);
-        countdown.textContent = 'Unavailable';
-        liveBadge.textContent = 'Session unavailable';
+        countdown.textContent = retryable ? 'Retrying shortly...' : 'Unavailable';
+        liveBadge.textContent = retryable ? 'Reconnecting' : 'Session unavailable';
         liveBadge.classList.add('error');
+        if (retryable) refreshTimer = window.setTimeout(refreshQr, 5000);
       }
 
       function refreshQr() {
+        window.clearTimeout(refreshTimer);
+        window.clearTimeout(refreshWatchdog);
+        const requestId = ++requestSequence;
+        refreshWatchdog = window.setTimeout(() => {
+          if (requestId !== requestSequence) return;
+          requestSequence += 1;
+          showQrError('Could not refresh the QR code. Check the connection; retrying automatically.', true);
+        }, 30000);
+
         google.script.run
           .withSuccessHandler(data => {
+            if (requestId !== requestSequence) return;
+            window.clearTimeout(refreshWatchdog);
             if (!data.valid) {
-              showQrError(data.error);
+              showQrError(data.error, false);
               return;
             }
 
-            qrContainer.innerHTML = '';
+            try {
+              if (typeof QRCode !== 'function') throw new Error('QR renderer unavailable.');
+              qrContainer.innerHTML = '';
+              new QRCode(qrContainer, {
+                text: data.url,
+                width: 260,
+                height: 260,
+                colorDark: '#102522',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.H
+              });
+            } catch (error) {
+              showQrError('The QR renderer could not load. Close and reopen this dialog.', false);
+              return;
+            }
             liveBadge.textContent = 'Session live';
             liveBadge.classList.remove('error');
-            new QRCode(qrContainer, {
-              text: data.url,
-              width: 260,
-              height: 260,
-              colorDark: '#102522',
-              colorLight: '#ffffff',
-              correctLevel: QRCode.CorrectLevel.H
-            });
             expiresAt = data.expiresAt;
             updateCountdown();
-            window.clearTimeout(refreshTimer);
             refreshTimer = window.setTimeout(refreshQr, data.refreshAfterSeconds * 1000);
           })
           .withFailureHandler(error => {
-            showQrError(error && error.message ? error.message : 'Could not refresh the QR code.');
+            if (requestId !== requestSequence) return;
+            window.clearTimeout(refreshWatchdog);
+            showQrError('Could not refresh the QR code. Check the connection; retrying automatically.', true);
           })
           .getRotatingQrData(sessionToken, adminGrant);
       }

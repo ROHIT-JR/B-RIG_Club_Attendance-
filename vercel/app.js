@@ -6,7 +6,7 @@
   const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const DEVICE_STORAGE_KEY = 'brig_device_id';
   const ATTENDANCE_RECEIPT_PREFIX = 'brig_attended_';
-  const REQUEST_TIMEOUT_MS = 15000;
+  const REQUEST_TIMEOUT_MS = 30000;
   const BUTTON_LABELS = {
     continue: 'Continue securely',
     confirm: 'Confirm attendance',
@@ -196,7 +196,10 @@
       const message = data && (data.error || data.reason)
         ? String(data.error || data.reason)
         : 'The attendance service could not complete this request.';
-      throw makeRequestError(message, response.status === 408 || response.status === 429 || response.status >= 500);
+      const retryable = typeof data.retryable === 'boolean'
+        ? data.retryable
+        : response.status === 408 || response.status === 429 || response.status >= 500;
+      throw makeRequestError(message, retryable);
     }
 
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -235,7 +238,12 @@
       });
 
       if (!response.valid) {
-        showInvalid(response.reason || response.error || 'This attendance session is unavailable.');
+        showInvalid(response.reason || response.error || 'This attendance session is unavailable.', {
+          retryable: response.retryable === true,
+          help: response.retryable === true
+            ? 'Retry when your connection is stable, or scan the current QR code for a fresh link.'
+            : undefined
+        });
         return;
       }
       if (!response.accessGrant || typeof response.accessGrant !== 'string') {
@@ -262,7 +270,9 @@
     } catch (error) {
       showInvalid(error.message, {
         retryable: error.retryable === true,
-        help: 'Retry when your connection is stable, or scan the current QR code for a fresh link.'
+        help: error.retryable === true
+          ? 'Retry when your connection is stable, or scan the current QR code for a fresh link.'
+          : 'Contact the club administrator if the current QR continues to fail.'
       });
     }
   }
@@ -288,7 +298,7 @@
 
   function handleAttendanceResponse(response, errorElement) {
     if (response.success || response.duplicate) {
-      saveAttendanceReceipt();
+      if (response.success || response.sameDevice) saveAttendanceReceipt();
       state.accessGrant = '';
       if (response.duplicate) {
         const time = recordedTime(response.time);
@@ -313,7 +323,8 @@
       return;
     }
 
-    showError(errorElement, response.error || 'Attendance could not be recorded. Please try again.');
+    const message = response.error || 'Attendance could not be recorded. Please try again.';
+    showError(errorElement, response.retryable ? `${message} It is safe to try again.` : message);
   }
 
   async function submitAttendance(isNewRegistration, errorElement, button, backButton, label) {

@@ -76,6 +76,8 @@ function initWorkbook() {
     }
   }
 
+  sanitizeExistingCheckinUserAgents_();
+
   SpreadsheetApp.getUi().alert('Workbook initialised successfully.');
 }
 
@@ -229,7 +231,7 @@ function showCurrentSessionQR(providedToken) {
 
   const htmlTemplate = HtmlService.createTemplateFromFile('AdminSidebar');
   const adminGrant = Utilities.getUuid();
-  CacheService.getScriptCache().put(`admin-qr:${adminGrant}`, String(token), 3600);
+  CacheService.getScriptCache().put(`admin-qr:${adminGrant}`, String(token), 21600);
   htmlTemplate.sessionToken = token;
   htmlTemplate.adminGrant = adminGrant;
   
@@ -254,6 +256,7 @@ function getRotatingQrData(token, adminGrant) {
   if (!grantedToken || !safeStringEqual_(String(grantedToken), String(token))) {
     return { valid: false, error: 'This admin QR display is not authorized.' };
   }
+  CacheService.getScriptCache().put(`admin-qr:${adminGrant}`, String(token), 21600);
 
   const session = DB.getSessionByToken(token);
   const now = new Date();
@@ -268,8 +271,7 @@ function getRotatingQrData(token, adminGrant) {
 
   const expiresAt = Date.now() + (CONFIG.ACCESS_CONTROL.QR_LIFETIME_SECONDS * 1000);
   const signature = signQrAccess_(token, expiresAt);
-  const separator = studentAppUrl.includes('?') ? '&' : '?';
-  const url = `${studentAppUrl}${separator}session=${encodeURIComponent(token)}` +
+  const url = `${studentAppUrl}?session=${encodeURIComponent(token)}` +
     `&access=${encodeURIComponent(signature)}&expires=${expiresAt}`;
 
   return {
@@ -287,9 +289,18 @@ function getRotatingQrData(token, adminGrant) {
 function getQrSigningSecret_() {
   const properties = PropertiesService.getScriptProperties();
   let secret = properties.getProperty('QR_SIGNING_SECRET');
-  if (!secret) {
-    secret = Utilities.getUuid() + Utilities.getUuid();
-    properties.setProperty('QR_SIGNING_SECRET', secret);
+  if (secret) return secret;
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    secret = properties.getProperty('QR_SIGNING_SECRET');
+    if (!secret) {
+      secret = Utilities.getUuid() + Utilities.getUuid();
+      properties.setProperty('QR_SIGNING_SECRET', secret);
+    }
+  } finally {
+    lock.releaseLock();
   }
   return secret;
 }
@@ -379,18 +390,20 @@ function isValidAccessGrant_(grant, sessionToken, deviceId) {
  * Closes the currently open session.
  */
 function closeCurrentSession() {
-  const openSession = getOpenSession();
-  if (!openSession) {
-    SpreadsheetApp.getUi().alert('No open session found.');
-    return;
-  }
+  const closed = DB.withLock(() => {
+    const openSession = getOpenSession();
+    if (!openSession) return false;
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sessionSheet = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
-  const statusIndex = sessionSheet.getRange(1, 1, 1, sessionSheet.getLastColumn()).getValues()[0].indexOf('Status') + 1;
-  
-  sessionSheet.getRange(openSession.row, statusIndex).setValue(CONFIG.STATUS.SESSION.CLOSED);
-  SpreadsheetApp.getUi().alert('Session closed successfully.');
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sessionSheet = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
+    const headers = sessionSheet.getRange(1, 1, 1, sessionSheet.getLastColumn()).getValues()[0];
+    const statusIndex = headers.indexOf('Status') + 1;
+    if (statusIndex < 1) throw new Error('Sessions sheet headers are invalid. Run workbook setup again.');
+
+    sessionSheet.getRange(openSession.row, statusIndex).setValue(CONFIG.STATUS.SESSION.CLOSED);
+    return true;
+  });
+  SpreadsheetApp.getUi().alert(closed ? 'Session closed successfully.' : 'No open session found.');
 }
 
 // --------------------------------------------------------------------------------
@@ -424,7 +437,12 @@ function doPost(e) {
       return jsonResponse_({ success: false, error: 'Request could not be processed.' });
     }
 
-    const request = JSON.parse(contents);
+    let request;
+    try {
+      request = JSON.parse(contents);
+    } catch (error) {
+      return jsonResponse_({ success: false, error: 'Request could not be processed.' });
+    }
     if (!request || typeof request !== 'object' || Array.isArray(request) || !verifyVercelApiSecret_(request.apiSecret)) {
       return jsonResponse_({ success: false, error: 'Request could not be processed.' });
     }
@@ -462,7 +480,11 @@ function doPost(e) {
         return jsonResponse_({ success: false, error: 'Unsupported action.' });
     }
   } catch (error) {
-    return jsonResponse_({ success: false, error: 'Request could not be processed.' });
+    return jsonResponse_({
+      success: false,
+      error: 'The attendance service is temporarily unavailable. Please try again.',
+      retryable: true
+    });
   }
 }
 
@@ -572,6 +594,9 @@ function validateRollNo(rollNumber, sessionToken, deviceId, accessGrant) {
   if (student && (!student.status || String(student.status).trim().toUpperCase() === activeStatus)) {
     return { valid: true, exists: true, fullName: student.fullName, rollNumber: student.rollNumber };
   }
+  if (student) {
+    return { valid: false, error: 'Your registration is awaiting administrator approval.' };
+  }
   return { valid: true, exists: false, rollNumber: normalizedRollNo };
 }
 
@@ -600,7 +625,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
   }
 
   const deviceHash = hashDeviceId(String(deviceId));
-  const safeUserAgent = String(userAgent || '').slice(0, 250);
+  const safeUserAgent = sanitizeSpreadsheetText_(userAgent, 250);
 
   return DB.withLock(() => {
     // 1. Re-validate session
@@ -621,7 +646,12 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
     // 2. Prevent repeat attendance by student or browser device.
     const existingCheckin = DB.getCheckin(session.sessionId, normalizedRollNo);
     if (existingCheckin) {
-      return { success: false, duplicate: true, time: existingCheckin.timestamp };
+      return {
+        success: false,
+        duplicate: true,
+        sameDevice: Boolean(existingCheckin.deviceHash && existingCheckin.deviceHash === deviceHash),
+        time: existingCheckin.timestamp
+      };
     }
 
     const deviceCheckin = DB.getCheckinByDevice(session.sessionId, deviceHash);
@@ -740,6 +770,43 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
 }
 
 /**
+ * Sanitizes untrusted text before writing it to Google Sheets.
+ * @param {*} value
+ * @param {number} maxLength
+ * @returns {string}
+ */
+function sanitizeSpreadsheetText_(value, maxLength) {
+  let text = String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, maxLength);
+  if (/^\s*[=+@-]/.test(text)) text = "'" + text.slice(0, Math.max(0, maxLength - 1));
+  return text;
+}
+
+/**
+ * Neutralizes formula-like user agents left by older deployments.
+ */
+function sanitizeExistingCheckinUserAgents_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
+  if (!sheet || sheet.getLastRow() < 2) return;
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const userAgentColumn = headers.indexOf('User Agent') + 1;
+  if (userAgentColumn < 1) return;
+
+  const range = sheet.getRange(2, userAgentColumn, sheet.getLastRow() - 1, 1);
+  const values = range.getValues();
+  const formulas = range.getFormulas();
+  let changed = false;
+  const sanitized = values.map((row, index) => {
+    const original = formulas[index][0] || row[0];
+    const safe = sanitizeSpreadsheetText_(original, 250);
+    if (formulas[index][0] || safe !== String(row[0] || '')) changed = true;
+    return [safe];
+  });
+  if (changed) range.setValues(sanitized);
+}
+
+/**
  * Resets all attendance data (Sessions, Checkins, and Dashboard columns)
  * but keeps the registered students and settings.
  */
@@ -749,28 +816,26 @@ function clearAllData() {
     'Are you sure you want to delete ALL past sessions and check-in records? (Your registered students will NOT be deleted). This cannot be undone.', 
     ui.ButtonSet.YES_NO);
     
-  if (response == ui.Button.YES) {
+  if (response !== ui.Button.YES) return;
+
+  DB.withLock(() => {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    
-    // Clear Sessions
+
     const sessions = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
     if (sessions && sessions.getLastRow() > 1) {
       sessions.getRange(2, 1, sessions.getLastRow() - 1, sessions.getLastColumn()).clearContent();
     }
-    
-    // Clear Checkins
+
     const checkins = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (checkins && checkins.getLastRow() > 1) {
       checkins.getRange(2, 1, checkins.getLastRow() - 1, checkins.getLastColumn()).clearContent();
     }
-    
-    // Clear Dashboard Columns past C (3)
+
     const dashboard = ss.getSheetByName(CONFIG.SHEETS.DASHBOARD);
     if (dashboard && dashboard.getLastColumn() > 3) {
-      // Delete the session columns completely so it shrinks back to just the student names
       dashboard.deleteColumns(4, dashboard.getLastColumn() - 3);
     }
-    
-    ui.alert('Data reset successfully! Your student list is preserved, but all test sessions have been erased.');
-  }
+  });
+
+  ui.alert('Data reset successfully! Your student list is preserved, but all test sessions have been erased.');
 }

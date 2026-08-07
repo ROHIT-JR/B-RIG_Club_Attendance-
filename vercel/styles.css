@@ -3,7 +3,7 @@
   --surface: rgba(12, 31, 29, 0.88);
   --surface-raised: rgba(19, 43, 40, 0.84);
   --border: rgba(194, 232, 225, 0.13);
-  --border-strong: rgba(194, 232, 225, 0.23);
+  --border-strong: rgba(194, 232, 225, 0.42);
   --primary: #46c7b5;
   --primary-dark: #238b7e;
   --accent: #f3b35b;
@@ -34,7 +34,7 @@ body {
   min-width: 0;
   min-height: 100vh;
   min-height: 100dvh;
-  padding: max(20px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom));
+  padding: max(20px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
   overflow-x: hidden;
   overflow-x: clip;
   background: var(--bg);
@@ -350,14 +350,14 @@ input[type='text'] {
   outline: none;
   background: rgba(4, 15, 14, 0.55);
   color: var(--text);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.035em;
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
 input[type='text']::placeholder {
-  color: #617570;
+  color: #8ca09b;
 }
 
 input[type='text']:focus {
@@ -406,7 +406,7 @@ button {
 
 button:focus-visible,
 input:focus-visible {
-  outline: 3px solid rgba(70, 199, 181, 0.42);
+  outline: 3px solid #70ddcd;
   outline-offset: 3px;
 }
 
@@ -601,7 +601,7 @@ button:disabled {
 
 .page-footer {
   margin-top: 18px;
-  color: #637974;
+  color: #819590;
   font-size: 10px;
   letter-spacing: 0.07em;
   text-align: center;
@@ -671,8 +671,8 @@ button:disabled {
 
 @media (max-width: 420px) {
   body {
-    padding-right: 12px;
-    padding-left: 12px;
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-left: max(12px, env(safe-area-inset-left));
   }
 
   .brand-bar {
