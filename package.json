@@ -1,14 +1,22 @@
 {
   "name": "club-attendance-system",
   "version": "1.0.0",
-  "description": "Zero-cost QR attendance system for Google Sheets and Google Apps Script.",
+  "description": "Hybrid Vercel, Google Apps Script, and Google Sheets QR attendance system.",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
+    "test": "node --test test/*.test.js && npm --prefix vercel test",
+    "test:apps-script": "node --test test/*.test.js",
     "login": "clasp login",
     "create": "clasp create --type sheets --title \"Club Attendance System\"",
     "deploy": "clasp push",
     "open": "clasp open"
   },
   "devDependencies": {
-    "@google/clasp": "^2.4.2"
+    "@google/clasp": "^3.3.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

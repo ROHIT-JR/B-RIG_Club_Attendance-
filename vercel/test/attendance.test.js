@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const attendance = require('../api/attendance');
-const { createHandler, MAX_BODY_BYTES } = attendance;
+const { createHandler, DEFAULT_TIMEOUT_MS, MAX_BODY_BYTES } = attendance;
 
 const VALID_ENV = {
   APPS_SCRIPT_URL: 'https://script.google.com/macros/s/test-deployment_123/exec',
@@ -158,9 +158,41 @@ test('rejects missing server configuration without contacting upstream', async t
       const res = await invoke(handler, createRequest(validSessionBody()));
       assert.equal(res.statusCode, 500);
       assert.equal(fetched, false);
-      assert.deepEqual(JSON.parse(res.body), { error: 'Server configuration error.' });
+      assert.deepEqual(JSON.parse(res.body), {
+        error: 'Attendance is temporarily unavailable. Contact the club administrator.',
+        retryable: false
+      });
     });
   }
+});
+
+test('uses an upstream timeout longer than the Apps Script lock wait', () => {
+  assert.equal(DEFAULT_TIMEOUT_MS, 25_000);
+});
+
+test('rate limits repeated requests by browser device before contacting Apps Script', async () => {
+  let fetchCount = 0;
+  const handler = createHandler({
+    env: VALID_ENV,
+    rateLimits: {
+      perIp: 100,
+      perDeviceAction: { sessionDetails: 2 }
+    },
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return jsonResponse({ valid: true });
+    }
+  });
+  const requestOptions = { headers: { 'x-forwarded-for': '203.0.113.8' } };
+
+  assert.equal((await invoke(handler, createRequest(validSessionBody(), requestOptions))).statusCode, 200);
+  assert.equal((await invoke(handler, createRequest(validSessionBody(), requestOptions))).statusCode, 200);
+  const limited = await invoke(handler, createRequest(validSessionBody(), requestOptions));
+
+  assert.equal(limited.statusCode, 429);
+  assert.equal(limited.getHeader('retry-after'), '60');
+  assert.match(JSON.parse(limited.body).error, /too many attendance requests/i);
+  assert.equal(fetchCount, 2);
 });
 
 test('returns a generic 502 for upstream network failures', async () => {
@@ -187,6 +219,21 @@ test('returns a generic 502 for upstream HTML', async () => {
 
   assert.equal(res.statusCode, 502);
   assert.deepEqual(JSON.parse(res.body), { error: 'Attendance service returned an invalid response.' });
+});
+
+test('maps an Apps Script authentication rejection to administrator guidance', async () => {
+  const handler = createHandler({
+    env: VALID_ENV,
+    fetchImpl: async () => jsonResponse({ success: false, error: 'Request could not be processed.' })
+  });
+
+  const res = await invoke(handler, createRequest(validSessionBody()));
+
+  assert.equal(res.statusCode, 502);
+  assert.deepEqual(JSON.parse(res.body), {
+    error: 'Attendance is temporarily unavailable. Contact the club administrator.',
+    retryable: false
+  });
 });
 
 test('returns a generic 504 when the upstream request times out', async () => {
