@@ -26,7 +26,7 @@ function initWorkbook() {
 
   const sheetsConfig = [
     { name: CONFIG.SHEETS.DASHBOARD, headers: ['S.No', 'Name', 'Roll No'] },
-    { name: CONFIG.SHEETS.STUDENTS, headers: ['Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At', 'Created By', 'Notes'] },
+    { name: CONFIG.SHEETS.STUDENTS, headers: CONFIG.STUDENT_HEADERS },
     { name: CONFIG.SHEETS.SESSIONS, headers: ['Session ID', 'Session Date', 'Session Title', 'Opens At', 'Closes At', 'Status', 'Token', 'Created At', 'Created By'] },
     { name: CONFIG.SHEETS.CHECKINS, headers: CONFIG.CHECKIN_HEADERS },
     { name: CONFIG.SHEETS.SETTINGS, headers: ['Setting', 'Value'] }
@@ -470,6 +470,7 @@ function doPost(e) {
           requireApiString_(request.sessionToken, 128),
           requireApiString_(request.rollNumber, 32),
           optionalApiString_(request.fullName, 80),
+          optionalApiString_(request.officialEmail, 120),
           request.isNewRegistration,
           requireApiString_(request.deviceId, 64),
           optionalApiString_(request.userAgent, 250),
@@ -612,7 +613,7 @@ function validateRollNo(rollNumber, sessionToken, deviceId, accessGrant) {
 /**
  * Securely records attendance.
  */
-function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration, deviceId, userAgent, accessGrant) {
+function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, isNewRegistration, deviceId, userAgent, accessGrant) {
   if (!sessionToken || !rollNumber) {
     return { success: false, error: 'Missing required information.' };
   }
@@ -632,6 +633,13 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
   if (isNewRegistration && !isValidFullName(fullName)) {
     return { success: false, error: 'Enter a valid full name between 2 and 80 characters.' };
   }
+  officialEmail = normalizeOfficialEmail(officialEmail);
+  if (isNewRegistration && !isValidOfficialEmail(officialEmail, normalizedRollNo)) {
+    return {
+      success: false,
+      error: `Use your official college email: ${getOfficialEmailForRollNo(normalizedRollNo)}.`
+    };
+  }
 
   const deviceHash = hashDeviceId(String(deviceId));
   const safeUserAgent = sanitizeSpreadsheetText_(userAgent, 250);
@@ -650,6 +658,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
       return { success: false, error: 'Session has expired.' };
     }
 
+    const studentHeaders = DB.ensureStudentSchema();
     DB.ensureCheckinSchema();
 
     // 2. Prevent repeat attendance by student or browser device.
@@ -684,6 +693,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
     if (!student) {
       if (!isNewRegistration) return { success: false, error: 'Student not found.' };
       if (!fullName) return { success: false, error: 'Full name required for registration.' };
+      if (!officialEmail) return { success: false, error: 'Official college email required for registration.' };
 
       // Register new student
       const studentId = 'STU-' + now.getTime();
@@ -692,9 +702,15 @@ function submitAttendance(sessionToken, rollNumber, fullName, isNewRegistration,
         ? CONFIG.STATUS.STUDENT.PENDING 
         : CONFIG.STATUS.STUDENT.ACTIVE;
 
-      studentsSheet.appendRow([
-        studentId, normalizedRollNo, fullName, status, now, 'System', ''
-      ]);
+      const studentRow = Array(studentHeaders.length).fill('');
+      studentRow[studentHeaders.indexOf('Student ID')] = studentId;
+      studentRow[studentHeaders.indexOf('Roll Number')] = normalizedRollNo;
+      studentRow[studentHeaders.indexOf('Full Name')] = fullName;
+      studentRow[studentHeaders.indexOf('Status')] = status;
+      studentRow[studentHeaders.indexOf('Registered At')] = now;
+      studentRow[studentHeaders.indexOf('Created By')] = 'System';
+      studentRow[studentHeaders.indexOf('Official Email')] = officialEmail;
+      studentsSheet.appendRow(studentRow);
 
       // Add to dashboard
       const nextSNo = Math.max(1, dashboard.getLastRow()); // basic s.no

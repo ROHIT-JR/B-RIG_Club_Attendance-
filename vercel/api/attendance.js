@@ -45,6 +45,7 @@ const ACTION_SCHEMAS = {
     },
     optionalStrings: {
       fullName: 80,
+      officialEmail: 120,
       userAgent: 250
     },
     booleans: ['isNewRegistration']
@@ -160,9 +161,11 @@ function validateAndSelectPayload(body) {
     payload[field] = body[field];
   }
 
-  if (body.action === 'submitAttendance' && body.isNewRegistration &&
-      (typeof body.fullName !== 'string' || !body.fullName.trim())) {
-    return null;
+  if (body.action === 'submitAttendance' && body.isNewRegistration) {
+    if (typeof body.fullName !== 'string' || !body.fullName.trim() ||
+        typeof body.officialEmail !== 'string' || !body.officialEmail.trim()) {
+      return null;
+    }
   }
 
   return payload;

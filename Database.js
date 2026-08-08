@@ -79,6 +79,9 @@ const DB = {
           studentId: data[i][headers.indexOf('Student ID')],
           rollNumber: normalized,
           fullName: data[i][headers.indexOf('Full Name')],
+          officialEmail: headers.indexOf('Official Email') === -1
+            ? ''
+            : data[i][headers.indexOf('Official Email')],
           status: data[i][headers.indexOf('Status')],
           row: i + 1
         };
@@ -157,6 +160,33 @@ const DB = {
       }
     }
     return null;
+  },
+
+  /**
+   * Ensures registration uses the standard identity columns and a dedicated
+   * Official Email column, even before workbook setup is rerun after upgrade.
+   * @returns {Array<string>} Current Students headers.
+   */
+  ensureStudentSchema: function() {
+    const ss = getAttendanceSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
+    if (!sheet) throw new Error('Students sheet is missing. Run workbook setup first.');
+
+    const lastColumn = sheet.getLastColumn();
+    const headers = lastColumn > 0
+      ? sheet.getRange(1, 1, 1, lastColumn).getValues()[0]
+      : [];
+    const coreHeaders = CONFIG.STUDENT_HEADERS.slice(0, -1);
+    const coreIsValid = coreHeaders.every((header, index) => headers[index] === header);
+    if (!coreIsValid) {
+      throw new Error('Students sheet columns were renamed or reordered. Restore the headers before accepting attendance.');
+    }
+
+    if (!headers.includes('Official Email')) {
+      sheet.getRange(1, headers.length + 1).setValue('Official Email').setFontWeight('bold');
+      headers.push('Official Email');
+    }
+    return headers;
   },
 
   /**

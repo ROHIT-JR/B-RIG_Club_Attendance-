@@ -13,6 +13,11 @@ const API_SECRET = 'test-vercel-api-secret-at-least-32-characters';
 const DEVICE_ID = '123e4567-e89b-42d3-a456-426614174000';
 const OTHER_DEVICE_ID = '123e4567-e89b-42d3-b456-426614174001';
 const ROLL_NUMBER = 'CB.SC.U4CYS25048';
+const OFFICIAL_EMAIL = 'cb.sc.u4cys25048@cb.students.amrita.edu';
+const STUDENT_HEADERS = [
+  'Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At',
+  'Created By', 'Notes', 'Official Email'
+];
 
 function createOutput(content) {
   return {
@@ -351,6 +356,49 @@ test('preserves registered, unknown, and invalid roll validation', () => {
   assert.match(expired.error, /expired/i);
 });
 
+test('derives and validates the official college email from the roll number', () => {
+  const harness = createHarness();
+
+  assert.equal(harness.call('getOfficialEmailForRollNo', ROLL_NUMBER), OFFICIAL_EMAIL);
+  assert.equal(harness.call('getOfficialEmailForRollNo', ROLL_NUMBER.toLowerCase()), OFFICIAL_EMAIL);
+  assert.equal(harness.call('isValidOfficialEmail', OFFICIAL_EMAIL.toUpperCase(), ROLL_NUMBER), true);
+  assert.equal(
+    harness.call('isValidOfficialEmail', 'cb.sc.u4cys25049@cb.students.amrita.edu', ROLL_NUMBER),
+    false
+  );
+  assert.equal(harness.call('isValidOfficialEmail', `${ROLL_NUMBER.toLowerCase()}@example.com`, ROLL_NUMBER), false);
+});
+
+test('appends the dedicated official-email header during runtime schema enforcement', () => {
+  const headers = STUDENT_HEADERS.slice(0, -1);
+  const sheet = {
+    getLastColumn: () => headers.length,
+    getRange(row, column) {
+      if (row === 1 && column === 1) return { getValues: () => [[...headers]] };
+      return {
+        setValue(value) {
+          headers[column - 1] = value;
+          return this;
+        },
+        setFontWeight() { return this; }
+      };
+    }
+  };
+  const context = vm.createContext({
+    console,
+    __spreadsheet: { getSheetByName: () => sheet }
+  });
+  vm.runInContext(
+    CONFIG_SOURCE + '\n' + DATABASE_SOURCE + '\ngetAttendanceSpreadsheet = () => __spreadsheet;',
+    context
+  );
+
+  const result = vm.runInContext('DB.ensureStudentSchema()', context);
+
+  assert.deepEqual([...result], STUDENT_HEADERS);
+  assert.equal(headers[7], 'Official Email');
+});
+
 function createSubmitHarness(options = {}) {
   const checkins = [];
   const studentRows = [];
@@ -399,6 +447,7 @@ function createSubmitHarness(options = {}) {
     withLock: callback => callback(),
     getSessionByToken: token => token === session.token ? session : null,
     ensureCheckinSchema: () => {},
+    ensureStudentSchema: () => [...STUDENT_HEADERS],
     getCheckin: () => options.existingCheckin || null,
     getCheckinByDevice: () => options.deviceCheckin || null,
     getStudentByRollNo: () => options.student || null
@@ -417,7 +466,7 @@ test('records existing-student attendance and stores only the hashed device ID',
   });
   const result = environment.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, 'Untrusted Name', false, DEVICE_ID, '=IMPORTDATA("https://example.test")', environment.grant
+    'session-token', ROLL_NUMBER, 'Untrusted Name', '', false, DEVICE_ID, '=IMPORTDATA("https://example.test")', environment.grant
   );
 
   assert.equal(result.success, true);
@@ -434,21 +483,48 @@ test('registers a new student and records attendance', () => {
   const environment = createSubmitHarness();
   const result = environment.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, 'New Student', true, DEVICE_ID, 'test-agent', environment.grant
+    'session-token', ROLL_NUMBER, 'New Student', OFFICIAL_EMAIL, true, DEVICE_ID, 'test-agent', environment.grant
   );
 
   assert.equal(result.success, true);
   assert.equal(environment.studentRows.length, 1);
   assert.equal(environment.studentRows[0][1], ROLL_NUMBER);
   assert.equal(environment.studentRows[0][2], 'New Student');
+  assert.equal(environment.studentRows[0][7], OFFICIAL_EMAIL);
+  assert.equal(environment.dashboardRows.flat().includes(OFFICIAL_EMAIL), false);
+  assert.equal(environment.checkins.flat().includes(OFFICIAL_EMAIL), false);
   assert.equal(environment.checkins.length, 1);
+});
+
+test('rejects first-time registration when official email does not match the roll number', () => {
+  const environment = createSubmitHarness();
+  const result = environment.harness.call(
+    'submitAttendance',
+    'session-token', ROLL_NUMBER, 'New Student',
+    'cb.sc.u4cys25049@cb.students.amrita.edu', true, DEVICE_ID, 'test-agent', environment.grant
+  );
+
+  assert.equal(result.success, false);
+  assert.match(result.error, new RegExp(OFFICIAL_EMAIL.replace(/\./g, '\\.')));
+  assert.equal(environment.studentRows.length, 0);
+  assert.equal(environment.checkins.length, 0);
+
+  const emailAsName = createSubmitHarness();
+  const nameResult = emailAsName.harness.call(
+    'submitAttendance',
+    'session-token', ROLL_NUMBER, OFFICIAL_EMAIL, OFFICIAL_EMAIL,
+    true, DEVICE_ID, 'test-agent', emailAsName.grant
+  );
+  assert.equal(nameResult.success, false);
+  assert.match(nameResult.error, /valid full name/i);
+  assert.equal(emailAsName.studentRows.length, 0);
 });
 
 test('blocks duplicate roll and second roll from the same device', () => {
   const duplicate = createSubmitHarness({ existingCheckin: { timestamp: new Date() } });
   const duplicateResult = duplicate.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, '', false, DEVICE_ID, 'test-agent', duplicate.grant
+    'session-token', ROLL_NUMBER, '', '', false, DEVICE_ID, 'test-agent', duplicate.grant
   );
   assert.equal(duplicateResult.duplicate, true);
   assert.equal(duplicateResult.sameDevice, false);
@@ -461,7 +537,7 @@ test('blocks duplicate roll and second roll from the same device', () => {
   });
   const sameDeviceResult = sameDeviceDuplicate.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, '', false, DEVICE_ID, 'test-agent', sameDeviceDuplicate.grant
+    'session-token', ROLL_NUMBER, '', '', false, DEVICE_ID, 'test-agent', sameDeviceDuplicate.grant
   );
   assert.equal(sameDeviceResult.duplicate, true);
   assert.equal(sameDeviceResult.sameDevice, true);
@@ -469,7 +545,7 @@ test('blocks duplicate roll and second roll from the same device', () => {
   const device = createSubmitHarness({ deviceCheckin: { timestamp: new Date(), rollNumber: ROLL_NUMBER } });
   const deviceResult = device.harness.call(
     'submitAttendance',
-    'session-token', 'CB.SC.U4CYS25049', '', false, DEVICE_ID, 'test-agent', device.grant
+    'session-token', 'CB.SC.U4CYS25049', '', '', false, DEVICE_ID, 'test-agent', device.grant
   );
   assert.equal(deviceResult.deviceBlocked, true);
   assert.equal(device.checkins.length, 0);

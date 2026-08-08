@@ -152,7 +152,7 @@
           <div class="section-heading">
             <p class="eyebrow">First check-in</p>
             <h1 class="title">Create your profile</h1>
-            <p class="subtitle">We could not find this roll number. Enter your full name to register.</p>
+            <p class="subtitle">We could not find this roll number. Enter your name and official college email to register.</p>
           </div>
 
           <form id="form-register" novalidate>
@@ -173,6 +173,22 @@
                 autocapitalize="words"
                 aria-describedby="register-error"
               >
+            </div>
+            <div class="form-group">
+              <label for="regOfficialEmail">Official college email</label>
+              <input
+                type="email"
+                id="regOfficialEmail"
+                name="regOfficialEmail"
+                placeholder="cb.sc.u4cys25048@cb.students.amrita.edu"
+                maxlength="120"
+                required
+                autocomplete="email"
+                autocapitalize="none"
+                spellcheck="false"
+                aria-describedby="official-email-hint register-error"
+              >
+              <p class="field-help" id="official-email-hint">The email must match your roll number.</p>
             </div>
             <div class="error-text hidden" id="register-error" role="alert"></div>
             <button type="submit" class="btn-primary" id="btn-register-attendance">Register and check in</button>

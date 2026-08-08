@@ -35,6 +35,8 @@ test('Apps Script keeps admin QR rotation and locked attendance writes', () => {
   assert.match(code, /getCheckinByDevice/);
   assert.match(code, /hashDeviceId/);
   assert.match(code, /sanitizeSpreadsheetText_\(userAgent/);
+  assert.match(code, /Official Email/);
+  assert.match(code, /getOfficialEmailForRollNo/);
   assert.match(code, /getFormulas\(\)/);
   assert.match(config, /SPREADSHEET_ID/);
   assert.match(config, /SpreadsheetApp\.openById/);

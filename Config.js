@@ -6,12 +6,17 @@ const CONFIG = {
     PATTERN: /^CB\.SC\.U4([A-Z]{3})(\d{2})(\d{3})$/,
     EXAMPLE: 'CB.SC.U4CYS25048'
   },
+  OFFICIAL_EMAIL_DOMAIN: 'cb.students.amrita.edu',
   ACCESS_CONTROL: {
     QR_LIFETIME_SECONDS: 25,
     QR_REFRESH_SECONDS: 10,
     GRANT_LIFETIME_SECONDS: 300
   },
   DEVICE_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  STUDENT_HEADERS: [
+    'Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At',
+    'Created By', 'Notes', 'Official Email'
+  ],
   CHECKIN_HEADERS: [
     'Checkin ID', 'Timestamp', 'Session ID', 'Session Date', 'Roll Number',
     'Full Name', 'Result', 'Source', 'User Agent', 'Device ID'
@@ -71,6 +76,38 @@ function isValidRollNo(rollNo) {
 }
 
 /**
+ * Returns the official college email associated with a valid roll number.
+ * @param {string} rollNo
+ * @returns {string}
+ */
+function getOfficialEmailForRollNo(rollNo) {
+  const normalizedRollNo = normalizeRollNo(rollNo);
+  return isValidRollNo(normalizedRollNo)
+    ? `${normalizedRollNo.toLowerCase()}@${CONFIG.OFFICIAL_EMAIL_DOMAIN}`
+    : '';
+}
+
+/**
+ * Normalizes an official college email for comparison and storage.
+ * @param {string} email
+ * @returns {string}
+ */
+function normalizeOfficialEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+/**
+ * Requires the official email local part to equal the student's roll number.
+ * @param {string} email
+ * @param {string} rollNo
+ * @returns {boolean}
+ */
+function isValidOfficialEmail(email, rollNo) {
+  const expectedEmail = getOfficialEmailForRollNo(rollNo);
+  return Boolean(expectedEmail) && normalizeOfficialEmail(email) === expectedEmail;
+}
+
+/**
  * Normalizes a student's name while preventing spreadsheet formula injection.
  * @param {string} fullName
  * @returns {string}
@@ -89,6 +126,7 @@ function isValidFullName(fullName) {
   return normalized.length >= 2 &&
     normalized.length <= 80 &&
     !/^[=+@-]/.test(normalized) &&
+    !/@/.test(normalized) &&
     !/[\u0000-\u001f\u007f]/.test(normalized);
 }
 
