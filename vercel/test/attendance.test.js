@@ -121,6 +121,24 @@ test('rejects missing required fields', async () => {
   assert.equal(res.statusCode, 400);
 });
 
+test('requires an official email for first-time registration', async () => {
+  const handler = createHandler({ env: VALID_ENV, fetchImpl: async () => jsonResponse({}) });
+  const body = {
+    action: 'submitAttendance',
+    sessionToken: 'session-token',
+    rollNumber: 'CB.SC.U4CYS25048',
+    fullName: 'Test Student',
+    isNewRegistration: true,
+    deviceId: '123e4567-e89b-42d3-a456-426614174000',
+    accessGrant: 'short-lived-grant'
+  };
+
+  const res = await invoke(handler, createRequest(body));
+
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(JSON.parse(res.body), { error: 'Invalid request payload.' });
+});
+
 test('rejects oversized content-length and parsed bodies', async t => {
   const handler = createHandler({ env: VALID_ENV, fetchImpl: async () => jsonResponse({}) });
 
@@ -279,6 +297,7 @@ test('forwards validated fields with the server secret and never exposes it', as
     sessionToken: 'session-token',
     rollNumber: 'CB.SC.U4CYS25048',
     fullName: 'Test Student',
+    officialEmail: 'cb.sc.u4cys25048@cb.students.amrita.edu',
     isNewRegistration: false,
     deviceId: '123e4567-e89b-42d3-a456-426614174000',
     userAgent: 'node-test',

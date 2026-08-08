@@ -3,6 +3,7 @@
 
   const API_ENDPOINT = '/api/attendance';
   const ROLL_NUMBER_PATTERN = /^CB\.SC\.U4[A-Z]{3}\d{2}\d{3}$/;
+  const OFFICIAL_EMAIL_DOMAIN = 'cb.students.amrita.edu';
   const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const DEVICE_STORAGE_KEY = 'brig_device_id';
   const ATTENDANCE_RECEIPT_PREFIX = 'brig_attended_';
@@ -22,6 +23,7 @@
     accessGrant: '',
     rollNumber: '',
     fullName: '',
+    officialEmail: '',
     deviceId: getOrCreateDeviceId()
   };
 
@@ -57,6 +59,8 @@
     formRegister: document.getElementById('form-register'),
     regRollNumber: document.getElementById('regRollNumber'),
     regFullName: document.getElementById('regFullName'),
+    regOfficialEmail: document.getElementById('regOfficialEmail'),
+    officialEmailHint: document.getElementById('official-email-hint'),
     registerError: document.getElementById('register-error'),
     btnRegisterAttendance: document.getElementById('btn-register-attendance'),
     btnRegisterBack: document.getElementById('btn-register-back'),
@@ -282,9 +286,11 @@
   function resetIdentity() {
     state.rollNumber = '';
     state.fullName = '';
+    state.officialEmail = '';
     elements.rollNumber.value = '';
     elements.regRollNumber.value = '';
     elements.regFullName.value = '';
+    elements.regOfficialEmail.value = '';
     hideError(elements.rollError);
     hideError(elements.confirmError);
     hideError(elements.registerError);
@@ -351,6 +357,7 @@
         sessionToken: state.sessionToken,
         rollNumber: state.rollNumber,
         fullName: state.fullName,
+        officialEmail: state.officialEmail,
         isNewRegistration,
         deviceId: state.deviceId,
         userAgent: navigator.userAgent.slice(0, 250),
@@ -386,6 +393,11 @@
   elements.rollNumber.addEventListener('input', event => {
     event.target.value = event.target.value.toUpperCase().replace(/\s/g, '').slice(0, 16);
     hideError(elements.rollError);
+  });
+
+  elements.regOfficialEmail.addEventListener('input', event => {
+    event.target.value = event.target.value.toLowerCase().replace(/\s/g, '').slice(0, 120);
+    hideError(elements.registerError);
   });
 
   elements.formRoll.addEventListener('submit', async event => {
@@ -434,8 +446,13 @@
       }
 
       state.fullName = '';
+      state.officialEmail = '';
       elements.regRollNumber.value = state.rollNumber;
       elements.regFullName.value = '';
+      elements.regOfficialEmail.value = '';
+      const expectedEmail = `${state.rollNumber.toLowerCase()}@${OFFICIAL_EMAIL_DOMAIN}`;
+      elements.regOfficialEmail.placeholder = expectedEmail;
+      elements.officialEmailHint.textContent = `Required format: ${expectedEmail}`;
       showView('register', elements.regFullName);
     } catch (error) {
       const retryMessage = error.retryable
@@ -464,13 +481,22 @@
     hideError(elements.registerError);
 
     const fullName = elements.regFullName.value.trim().replace(/\s+/g, ' ');
-    if (fullName.length < 2) {
+    if (fullName.length < 2 || fullName.includes('@')) {
       showError(elements.registerError, 'Enter your full official name.');
       elements.regFullName.focus();
       return;
     }
 
+    const officialEmail = elements.regOfficialEmail.value.trim().toLowerCase();
+    const expectedEmail = `${state.rollNumber.toLowerCase()}@${OFFICIAL_EMAIL_DOMAIN}`;
+    if (officialEmail !== expectedEmail) {
+      showError(elements.registerError, `Use your official college email: ${expectedEmail}.`);
+      elements.regOfficialEmail.focus();
+      return;
+    }
+
     state.fullName = fullName;
+    state.officialEmail = officialEmail;
     submitAttendance(
       true,
       elements.registerError,

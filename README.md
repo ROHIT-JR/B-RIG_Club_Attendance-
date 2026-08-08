@@ -6,7 +6,7 @@ B-RIG is a QR attendance system with a student frontend on Vercel, a private ser
 
 - Signed QR links that expire after 25 seconds and rotate about every 10 seconds
 - Five-minute access grants bound to one browser identifier and one session
-- Existing-student lookup and optional first-time registration
+- Existing-student lookup and first-time registration with name and official college email
 - Institutional roll-number validation using `CB.SC.U4CYS25048` format
 - Duplicate roll and one-attendance-per-browser enforcement under `LockService`
 - Immediate Google Sheets check-in logging and dashboard updates
@@ -187,8 +187,9 @@ Return to the Apps Script editor and refresh it. Confirm the five files are pres
 5. Wait for the **Workbook initialised successfully** alert.
 6. Confirm that the following tabs now exist: `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings`.
 7. Open `Checkins` and confirm the exact ordered headers are `Checkin ID`, `Timestamp`, `Session ID`, `Session Date`, `Roll Number`, `Full Name`, `Result`, `Source`, `User Agent`, and `Device ID`.
-8. Open `Settings` and confirm that `Student Web App URL` exists. Leave its placeholder unchanged until Vercel is deployed.
-9. Return to Apps Script **Project Settings > Script Properties** and confirm setup created `SPREADSHEET_ID`.
+8. Open `Students` and confirm `Official Email` is the final header.
+9. Open `Settings` and confirm that `Student Web App URL` exists. Leave its placeholder unchanged until Vercel is deployed.
+10. Return to Apps Script **Project Settings > Script Properties** and confirm setup created `SPREADSHEET_ID`.
 
 Initialization is safe to rerun when upgrading. It appends missing settings and headers without deleting attendance records, although it neutralizes formula-like historical `User Agent` values as safe text. It does not rearrange a damaged schema, so always verify the exact `Checkins` order after a repair. Do not rename required tabs or standard headers.
 
@@ -331,13 +332,15 @@ Prefer a separate staging Sheet, Apps Script deployment, and Vercel Preview for 
 7. Confirm the browser stays on the Vercel or custom student hostname.
 8. Confirm no Google account chooser, Google Drive page, Apps Script page, or GitHub redirect appears.
 9. Enter a valid test roll such as `CB.SC.U4CYS25048`.
-10. Complete registration or confirm the existing test student.
-11. Verify the success screen appears.
-12. In `Checkins`, verify one row was created with a 64-character hashed `Device ID`.
-13. In `Attendance Dashboard`, verify the student is marked `P` for the session.
-14. Rescan from the same browser and confirm the already-submitted state appears.
-15. Select **Club Attendance > Close Current Session**.
-16. Confirm a previously opened form can no longer submit.
+10. For a new student, enter the official name and the matching official email, such as `cb.sc.u4cys25048@cb.students.amrita.edu`.
+11. Complete registration or confirm the existing test student.
+12. Verify the success screen appears.
+13. In `Students`, verify the official email is stored in its separate `Official Email` column.
+14. In `Checkins`, verify one row was created with a 64-character hashed `Device ID` and no email column.
+15. In `Attendance Dashboard`, verify the student is marked `P` and no email was added.
+16. Rescan from the same browser and confirm the already-submitted state appears.
+17. Select **Club Attendance > Close Current Session**.
+18. Confirm a previously opened form can no longer submit.
 
 Decode one generated QR and verify that its hostname is the student hostname and its parameters are only `session`, `access`, and `expires`. It must not contain `script.google.com`, `authuser`, GitHub Pages, or `qr.html`.
 
@@ -407,6 +410,25 @@ Programme Dept Year Roll
 | Roll sequence | Exactly three digits | `048` |
 
 Input is normalized to uppercase and validated in both the browser and Apps Script.
+
+### Official college email
+
+First-time registration requires an email whose local part is the normalized roll number in lowercase:
+
+```text
+Roll:  CB.SC.U4CYS25048
+Email: cb.sc.u4cys25048@cb.students.amrita.edu
+```
+
+The accepted value is exactly:
+
+```text
+<lowercase-roll-number>@cb.students.amrita.edu
+```
+
+An address with another roll number, another domain, extra characters, or an alias is rejected. The server derives the expected address from the validated roll number instead of trusting browser validation.
+
+The email is stored only in the `Students` sheet's `Official Email` column. It is intentionally excluded from `Attendance Dashboard` and `Checkins`. This format check does not prove that the student controls the mailbox; administrators should use their normal identity or approval process when proof is required.
 
 ## Security Model
 
@@ -488,7 +510,7 @@ When `New registrations require approval` is `TRUE`, the student's first attenda
 
 1. Open `Students`.
 2. Find the row by normalized roll number.
-3. Verify the submitted full name through the club's normal identity process.
+3. Verify the submitted full name and official email through the club's normal identity process.
 4. Change `Status` from `Pending` to `Active` to approve the student.
 5. Use `Inactive` only when future attendance must be blocked.
 6. Do not change the roll-number format or standard column names.
@@ -738,4 +760,4 @@ The first ten `Checkins` headers must be exactly `Checkin ID`, `Timestamp`, `Ses
 
 ## Privacy
 
-The Sheet contains student identity and attendance records. Restrict Sheet edit access, avoid exporting logs unnecessarily, set an appropriate retention policy, and close sessions promptly. Signed QR parameters may appear in Vercel request metadata and expire quickly; restrict observability access and retention. Never commit `.clasp.json`, production environment files, API secrets, or exported student data.
+The Sheet contains student names, roll numbers, official college emails, and attendance records. Restrict Sheet edit access, avoid exporting logs unnecessarily, set an appropriate retention policy, and close sessions promptly. Signed QR parameters may appear in Vercel request metadata and expire quickly; restrict observability access and retention. Never commit `.clasp.json`, production environment files, API secrets, or exported student data.

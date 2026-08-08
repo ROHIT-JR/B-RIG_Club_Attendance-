@@ -40,6 +40,7 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 - [ ] Run **Club Attendance > Setup / Initialise Workbook**.
 - [ ] `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings` exist.
 - [ ] Re-running setup preserves records except that formula-like historical `User Agent` cells are converted to safe text.
+- [ ] `Students` has the standard first seven identity headers and a separate `Official Email` header.
 - [ ] `Checkins` has exactly these first ten headers in order: `Checkin ID`, `Timestamp`, `Session ID`, `Session Date`, `Roll Number`, `Full Name`, `Result`, `Source`, `User Agent`, `Device ID`.
 - [ ] Apps Script Script Properties contains the `SPREADSHEET_ID` recorded by workbook setup.
 - [ ] `Student Web App URL` contains only the stable Vercel/custom root HTTPS origin.
@@ -99,11 +100,15 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 
 - [ ] Create `Week 1` and scan its live QR with a normal persistent browser.
 - [ ] Enter an unknown valid roll.
-- [ ] The app requests the student's full official name.
+- [ ] The app requests the student's full official name and official college email.
 - [ ] Empty, one-character, control-character, and formula-like names are rejected.
-- [ ] Submit a valid name and reach the success screen.
-- [ ] The `Students` row contains the normalized roll, name, expected Active/Pending status, and timestamp.
+- [ ] For `CB.SC.U4CYS25048`, enter `cb.sc.u4cys25048@cb.students.amrita.edu`. It is accepted.
+- [ ] Enter an email with a different roll number. It is rejected.
+- [ ] Enter the correct roll local part with another domain. It is rejected.
+- [ ] Submit a valid name and matching official email, then reach the success screen.
+- [ ] The `Students` row contains the normalized roll, name, official email, expected Active/Pending status, and timestamp.
 - [ ] The `Checkins` row contains the session, roll, submitted registration name, source, sanitized user agent, and a 64-character device hash.
+- [ ] Neither `Checkins` nor `Attendance Dashboard` contains the official email.
 - [ ] The raw browser UUID is not present in the Sheet.
 - [ ] The dashboard adds the student and marks the current session `P`.
 - [ ] Earlier session columns for a newly registered student contain the pre-registration marker.
