@@ -35,7 +35,7 @@ const DB = {
    * @returns {Array} Array of student objects.
    */
   getActiveStudents: function() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
     if (!sheet) return [];
 
@@ -65,7 +65,7 @@ const DB = {
    */
   getStudentByRollNo: function(rollNumber) {
     const normalized = normalizeRollNo(rollNumber);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
     if (!sheet) return null;
 
@@ -94,7 +94,7 @@ const DB = {
    */
   getSessionByToken: function(token) {
     if (!token) return null;
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.SESSIONS);
     if (!sheet) return null;
 
@@ -104,12 +104,19 @@ const DB = {
     
     for (let i = 1; i < data.length; i++) {
       if (data[i][tokenIndex] === token) {
+        const sessionDate = new Date(data[i][headers.indexOf('Session Date')]);
+        const opensAt = new Date(data[i][headers.indexOf('Opens At')]);
+        const closesAt = new Date(data[i][headers.indexOf('Closes At')]);
+        if (![sessionDate, opensAt, closesAt].every(value => Number.isFinite(value.getTime())) ||
+            closesAt.getTime() <= opensAt.getTime()) {
+          return null;
+        }
         return {
           sessionId: data[i][headers.indexOf('Session ID')],
-          date: data[i][headers.indexOf('Session Date')],
+          date: sessionDate,
           title: data[i][headers.indexOf('Session Title')],
-          opensAt: new Date(data[i][headers.indexOf('Opens At')]),
-          closesAt: new Date(data[i][headers.indexOf('Closes At')]),
+          opensAt: opensAt,
+          closesAt: closesAt,
           status: data[i][headers.indexOf('Status')],
           token: token,
           row: i + 1
@@ -127,7 +134,7 @@ const DB = {
    */
   getCheckin: function(sessionId, rollNumber) {
     const normalized = normalizeRollNo(rollNumber);
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (!sheet) return null;
 
@@ -136,6 +143,7 @@ const DB = {
     const sessionIndex = headers.indexOf('Session ID');
     const rollIndex = headers.indexOf('Roll Number');
     const timeIndex = headers.indexOf('Timestamp');
+    const deviceIndex = headers.indexOf('Device ID');
     if (sessionIndex === -1 || rollIndex === -1 || timeIndex === -1) {
       throw new Error('Checkins sheet headers are invalid. Run workbook setup again.');
     }
@@ -143,7 +151,8 @@ const DB = {
     for (let i = 1; i < data.length; i++) {
       if (data[i][sessionIndex] === sessionId && normalizeRollNo(data[i][rollIndex]) === normalized) {
         return {
-          timestamp: data[i][timeIndex]
+          timestamp: data[i][timeIndex],
+          deviceHash: deviceIndex === -1 ? '' : data[i][deviceIndex]
         };
       }
     }
@@ -154,7 +163,7 @@ const DB = {
    * Ensures all duplicate-enforcement columns exist before accepting attendance.
    */
   ensureCheckinSchema: function() {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (!sheet) throw new Error('Checkins sheet is missing. Run workbook setup first.');
 
@@ -184,7 +193,7 @@ const DB = {
    * @returns {Object|null}
    */
   getCheckinByDevice: function(sessionId, deviceHash) {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getAttendanceSpreadsheet();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.CHECKINS);
     if (!sheet || !deviceHash) return null;
 

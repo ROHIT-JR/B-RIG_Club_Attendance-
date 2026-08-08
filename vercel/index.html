@@ -1,20 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <base target="_top">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#071716">
+    <meta name="referrer" content="no-referrer">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://avatars.githubusercontent.com; connect-src 'self'; upgrade-insecure-requests"
+    >
+    <meta name="description" content="Secure student attendance check-in for B-RIG Club.">
+    <title>B-RIG Club Attendance</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
-    <?!= include('Styles'); ?>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=Manrope:wght@600;700;800&amp;display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
   </head>
-  <body
-    data-session-token="<?= sessionToken ?>"
-    data-access-code="<?= accessCode ?>"
-    data-access-expires="<?= accessExpires ?>"
-  >
+  <body>
     <div class="page-background" aria-hidden="true">
       <div class="grid-pattern"></div>
       <div class="glow glow-primary"></div>
@@ -24,19 +27,25 @@
     <main class="page-shell">
       <header class="brand-bar">
         <div class="brand-identity">
-          <img src="https://avatars.githubusercontent.com/u/129193826?s=160&v=4" alt="B-RIG logo" class="brand-logo">
-          <div>
+          <img
+            src="https://avatars.githubusercontent.com/u/129193826?s=160&amp;v=4"
+            alt="B-RIG logo"
+            class="brand-logo"
+            width="44"
+            height="44"
+          >
+          <div class="brand-copy">
             <div class="brand-name">B-RIG</div>
             <div class="brand-caption">Club Attendance</div>
           </div>
         </div>
         <div class="secure-badge">
-          <span class="status-dot"></span>
+          <span class="status-dot" aria-hidden="true"></span>
           Secure check-in
         </div>
       </header>
 
-      <section class="app-card" aria-live="polite">
+      <section id="attendance-card" class="app-card" aria-live="polite" aria-busy="true">
         <div id="view-loading" class="view active loading-view">
           <div class="loader" aria-hidden="true"></div>
           <h1 class="title">Verifying session</h1>
@@ -50,8 +59,12 @@
             </svg>
           </div>
           <p class="eyebrow">Unable to continue</p>
-          <h1 class="title">Check-in unavailable</h1>
+          <h1 class="title" id="invalid-title" tabindex="-1">Check-in unavailable</h1>
           <p class="subtitle" id="invalid-reason">This session is invalid or has expired.</p>
+          <div class="recovery-panel" id="invalid-recovery">
+            <button type="button" class="btn-primary hidden" id="btn-retry-session">Try again</button>
+            <p class="recovery-help" id="invalid-help">Scan the current attendance QR code to open a fresh check-in link.</p>
+          </div>
         </div>
 
         <div id="view-roll-input" class="view hidden">
@@ -70,7 +83,7 @@
             <div>
               <span class="session-label">Current session</span>
               <strong id="session-title">Attendance session</strong>
-              <span id="session-date">Loading date...</span>
+              <span id="session-date"></span>
             </div>
           </div>
 
@@ -117,7 +130,7 @@
           </div>
 
           <div class="profile-card">
-            <div class="profile-avatar" id="confirm-avatar"></div>
+            <div class="profile-avatar" id="confirm-avatar" aria-hidden="true"></div>
             <div class="profile-details">
               <div class="profile-name" id="confirm-name"></div>
               <div class="profile-roll" id="confirm-roll"></div>
@@ -149,7 +162,17 @@
             </div>
             <div class="form-group">
               <label for="regFullName">Full name</label>
-              <input type="text" id="regFullName" name="regFullName" placeholder="Enter your official name" maxlength="80" required autocomplete="name">
+              <input
+                type="text"
+                id="regFullName"
+                name="regFullName"
+                placeholder="Enter your official name"
+                maxlength="80"
+                required
+                autocomplete="name"
+                autocapitalize="words"
+                aria-describedby="register-error"
+              >
             </div>
             <div class="error-text hidden" id="register-error" role="alert"></div>
             <button type="submit" class="btn-primary" id="btn-register-attendance">Register and check in</button>
@@ -165,10 +188,10 @@
             </svg>
           </div>
           <p class="eyebrow success-eyebrow">Attendance recorded</p>
-          <h1 class="title">You're checked in</h1>
+          <h1 class="title" id="success-title" tabindex="-1">You're checked in</h1>
           <p class="subtitle" id="success-message">Your attendance was recorded successfully.</p>
           <div class="success-footer">
-            <span class="status-dot"></span>
+            <span class="status-dot" aria-hidden="true"></span>
             You may close this page
           </div>
         </div>
@@ -176,7 +199,5 @@
 
       <footer class="page-footer">B-RIG Club &middot; Verified attendance system</footer>
     </main>
-
-    <?!= include('ClientScript'); ?>
   </body>
 </html>

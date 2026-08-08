@@ -8,3 +8,6 @@ package-lock.json
 README.md
 TESTING.md
 .clasp.json
+vercel/**
+test/**
+graphify-out/**

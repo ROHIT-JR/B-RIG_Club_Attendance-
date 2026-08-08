@@ -9,9 +9,7 @@ const CONFIG = {
   ACCESS_CONTROL: {
     QR_LIFETIME_SECONDS: 25,
     QR_REFRESH_SECONDS: 10,
-    GRANT_LIFETIME_SECONDS: 300,
-    GOOGLE_ACCOUNT_SLOT: 0,
-    QR_REDIRECT_URL: 'https://rohit-jr.github.io/B-RIG_Club_Attendance-/qr.html'
+    GRANT_LIFETIME_SECONDS: 300
   },
   DEVICE_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
   CHECKIN_HEADERS: [
@@ -27,11 +25,11 @@ const CONFIG = {
   },
   DEFAULT_SETTINGS: {
     'Club Name': 'Student Club',
-    'Public Web App URL': 'Paste your web app URL here',
+    'Student Web App URL': 'Paste your Vercel student URL here',
     'New registrations require approval': 'FALSE',
     'Default attendance window in minutes': '60',
     'Time zone': 'Asia/Kolkata',
-    'Version': '1.0.0'
+    'Version': '2.0.0'
   },
   STATUS: {
     STUDENT: {
@@ -109,14 +107,87 @@ function hashDeviceId(deviceId) {
 }
 
 /**
- * Accepts only a production Apps Script web-app deployment URL.
+ * Accepts an HTTPS student frontend while rejecting Google-hosted script URLs.
  * @param {string} url
  * @returns {boolean}
  */
-function isValidWebAppUrl(url) {
+function isValidStudentAppUrl(url) {
+  const value = String(url || '').trim();
+  const match = value.match(/^https:\/\/([A-Za-z0-9.-]+)(?::(\d{1,5}))?\/?$/);
+  if (!match) return false;
+
+  const hostname = match[1].toLowerCase();
+  const port = match[2] ? Number(match[2]) : null;
+  const labels = hostname.split('.');
+  if (hostname.length > 253 || labels.length < 2 || labels.some(label =>
+    !label || label.length > 63 || label.startsWith('-') || label.endsWith('-')
+  )) return false;
+  if (port !== null && (port < 1 || port > 65535)) return false;
+  if (labels.every(label => /^(?:\d+|0x[0-9a-f]+)$/i.test(label))) return false;
+
+  const blockedHosts = [
+    'google.com',
+    'googleusercontent.com',
+    'googleapis.com',
+    'gstatic.com',
+    'withgoogle.com',
+    'appspot.com',
+    'firebaseapp.com',
+    'web.app',
+    'github.io'
+  ];
+  return !blockedHosts.some(host => hostname === host || hostname.endsWith('.' + host));
+}
+
+/**
+ * Detects the legacy Apps Script student URL during migration.
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isAppsScriptWebAppUrl(url) {
   return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec\/?(?:\?.*)?$/.test(
     String(url || '').trim()
   );
+}
+
+/**
+ * Returns the attendance workbook in both bound-editor and web-app executions.
+ * Workbook setup records the bound Sheet ID for contexts with no active file.
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
+ */
+let attendanceSpreadsheet_ = null;
+
+function getAttendanceSpreadsheet() {
+  if (attendanceSpreadsheet_) return attendanceSpreadsheet_;
+
+  const properties = PropertiesService.getScriptProperties();
+  const activeSpreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (activeSpreadsheet) {
+    if (typeof activeSpreadsheet.getId === 'function') {
+      const activeId = activeSpreadsheet.getId();
+      if (activeId && properties.getProperty('SPREADSHEET_ID') !== activeId) {
+        properties.setProperty('SPREADSHEET_ID', activeId);
+      }
+    }
+    attendanceSpreadsheet_ = activeSpreadsheet;
+    return attendanceSpreadsheet_;
+  }
+
+  const spreadsheetId = properties.getProperty('SPREADSHEET_ID');
+  if (!spreadsheetId) {
+    const error = new Error('Attendance workbook is not configured. Run workbook setup from the bound Google Sheet.');
+    error.name = 'AttendanceConfigurationError';
+    throw error;
+  }
+  try {
+    attendanceSpreadsheet_ = SpreadsheetApp.openById(spreadsheetId);
+    return attendanceSpreadsheet_;
+  } catch (error) {
+    console.error('Could not open the configured attendance workbook:', error);
+    const configurationError = new Error('Attendance workbook could not be opened by the deployed Apps Script account.');
+    configurationError.name = 'AttendanceConfigurationError';
+    throw configurationError;
+  }
 }
 
 /**
@@ -125,7 +196,7 @@ function isValidWebAppUrl(url) {
  * @returns {string}
  */
 function getSetting(key) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getAttendanceSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.SHEETS.SETTINGS);
   if (!sheet) return CONFIG.DEFAULT_SETTINGS[key] || '';
   
@@ -136,4 +207,16 @@ function getSetting(key) {
     }
   }
   return CONFIG.DEFAULT_SETTINGS[key] || '';
+}
+
+/**
+ * Returns the configured student frontend URL, with a safe legacy-setting fallback.
+ * @returns {string}
+ */
+function getStudentAppUrl() {
+  const studentUrl = getSetting('Student Web App URL');
+  if (isValidStudentAppUrl(studentUrl)) return String(studentUrl).trim().replace(/\/$/, '');
+
+  const legacyUrl = getSetting('Public Web App URL');
+  return isValidStudentAppUrl(legacyUrl) ? String(legacyUrl).trim().replace(/\/$/, '') : '';
 }
