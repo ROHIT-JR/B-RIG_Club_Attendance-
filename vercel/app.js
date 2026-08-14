@@ -2,7 +2,9 @@
   'use strict';
 
   const API_ENDPOINT = '/api/attendance';
-  const ROLL_NUMBER_PATTERN = /^CB\.SC\.U4[A-Z]{3}\d{2}\d{3}$/;
+  const ROLL_NUMBER_PATTERN = /^CB\.[A-Z0-9.]+$/;
+  const ROLL_NUMBER_MIN_LENGTH = 8;
+  const ROLL_NUMBER_MAX_LENGTH = 32;
   const OFFICIAL_EMAIL_DOMAIN = 'cb.students.amrita.edu';
   const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const DEVICE_STORAGE_KEY = 'brig_device_id';
@@ -304,6 +306,19 @@
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  function normalizeRollNumber(value) {
+    return String(value || '').trim().toUpperCase();
+  }
+
+  function isValidRollNumber(value) {
+    const normalized = normalizeRollNumber(value);
+    return normalized.length >= ROLL_NUMBER_MIN_LENGTH &&
+      normalized.length <= ROLL_NUMBER_MAX_LENGTH &&
+      ROLL_NUMBER_PATTERN.test(normalized) &&
+      !normalized.includes('..') &&
+      !normalized.endsWith('.');
+  }
+
   function handleAttendanceResponse(response, errorElement) {
     if (response.success || response.duplicate) {
       if (response.success || response.sameDevice) saveAttendanceReceipt();
@@ -391,7 +406,7 @@
   }
 
   elements.rollNumber.addEventListener('input', event => {
-    event.target.value = event.target.value.toUpperCase().replace(/\s/g, '').slice(0, 16);
+    event.target.value = event.target.value.toUpperCase().slice(0, ROLL_NUMBER_MAX_LENGTH);
     hideError(elements.rollError);
   });
 
@@ -404,9 +419,9 @@
     event.preventDefault();
     hideError(elements.rollError);
 
-    const rollNumber = elements.rollNumber.value.trim().toUpperCase();
-    if (!ROLL_NUMBER_PATTERN.test(rollNumber)) {
-      showError(elements.rollError, 'Use CB.SC.U4CYS25048 format: 3 department letters, 2 joining-year digits, and 3 roll digits.');
+    const rollNumber = normalizeRollNumber(elements.rollNumber.value);
+    if (!isValidRollNumber(rollNumber)) {
+      showError(elements.rollError, 'Enter a valid CB university roll number using letters, numbers, and periods only.');
       elements.rollNumber.focus();
       return;
     }

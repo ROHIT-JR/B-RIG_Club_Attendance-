@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <style>
+      :root { color-scheme: light; font-family: Arial, sans-serif; color: #173d38; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #f4f8f7; }
+      main { display: flex; min-height: 100vh; flex-direction: column; padding: 22px; }
+      h1 { margin: 0 0 7px; font-size: 21px; }
+      .intro, .session { margin: 0 0 14px; color: #526c68; font-size: 13px; line-height: 1.45; }
+      .session { padding: 10px 12px; border-radius: 8px; background: #e4f1ee; }
+      input[type='search'] { width: 100%; padding: 11px 12px; border: 1px solid #aac5bf; border-radius: 8px; font-size: 14px; }
+      .toolbar { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; font-size: 12px; }
+      .clear { border: 0; background: transparent; color: #126a5c; cursor: pointer; font-weight: 700; }
+      .list { flex: 1; min-height: 220px; max-height: 355px; overflow: auto; border: 1px solid #c9dad6; border-radius: 9px; background: #fff; }
+      .student { display: grid; grid-template-columns: 24px 1fr auto; gap: 9px; align-items: center; padding: 11px 12px; border-bottom: 1px solid #e5eeec; cursor: pointer; }
+      .student:last-child { border-bottom: 0; }
+      .student:hover { background: #f0f8f6; }
+      .name { display: block; font-weight: 700; }
+      .roll { display: block; margin-top: 3px; color: #607975; font-size: 11px; }
+      .tags { display: flex; gap: 5px; }
+      .tag { padding: 3px 6px; border-radius: 999px; background: #dcece8; font-size: 10px; font-weight: 700; }
+      .tag.new { background: #fff0c7; color: #765400; }
+      .empty { padding: 35px 18px; color: #6a817d; text-align: center; }
+      .actions { display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px; margin-top: 15px; }
+      button { min-height: 42px; border: 0; border-radius: 8px; cursor: pointer; font-weight: 700; }
+      .cancel { background: #e1e9e7; color: #294b45; }
+      .generate { background: #126a5c; color: #fff; }
+      button:disabled { cursor: wait; opacity: .65; }
+      .status { min-height: 18px; margin: 10px 0 0; color: #a12f2f; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Add absent students (optional)</h1>
+      <p class="intro">Select only absent members who should still participate in this week's task groups.</p>
+      <p class="session" id="session-summary"></p>
+      <label>
+        <span class="intro">Search by name or roll number</span>
+        <input id="search" type="search" autocomplete="off" placeholder="Search absent students">
+      </label>
+      <div class="toolbar">
+        <strong id="selected-count">0 selected</strong>
+        <button class="clear" id="clear" type="button">Clear selection</button>
+      </div>
+      <div class="list" id="student-list" role="group" aria-label="Eligible absent students"></div>
+      <p class="status" id="status" role="alert"></p>
+      <div class="actions">
+        <button class="cancel" id="cancel" type="button">Cancel</button>
+        <button class="generate" id="generate" type="button">Generate Teams</button>
+      </div>
+    </main>
+    <script>
+      'use strict';
+      const data = <?!= selectorDataJson ?>;
+      const selected = new Set();
+      const list = document.getElementById('student-list');
+      const search = document.getElementById('search');
+      const count = document.getElementById('selected-count');
+      const status = document.getElementById('status');
+      const generate = document.getElementById('generate');
+
+      document.getElementById('session-summary').textContent =
+        `${data.sessionTitle} | ${data.attendanceDate} | ${data.presentCount} present by default`;
+
+      function updateCount() {
+        count.textContent = `${selected.size} selected`;
+      }
+
+      function render() {
+        const query = search.value.trim().toUpperCase();
+        const matches = data.absentStudents.filter(student =>
+          !query || student.fullName.toUpperCase().includes(query) || student.rollNumber.includes(query)
+        );
+        list.textContent = '';
+        if (!matches.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = data.absentStudents.length
+            ? 'No absent students match this search.'
+            : 'No eligible absent students. Generate Teams to use present students only.';
+          list.appendChild(empty);
+          return;
+        }
+        matches.forEach(student => {
+          const row = document.createElement('label');
+          row.className = 'student';
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.checked = selected.has(student.rollNumber);
+          checkbox.addEventListener('change', () => {
+            if (checkbox.checked) selected.add(student.rollNumber);
+            else selected.delete(student.rollNumber);
+            updateCount();
+          });
+          const identity = document.createElement('span');
+          identity.innerHTML = `<span class="name"></span><span class="roll"></span>`;
+          identity.querySelector('.name').textContent = student.fullName;
+          identity.querySelector('.roll').textContent = student.rollNumber;
+          const tags = document.createElement('span');
+          tags.className = 'tags';
+          const department = document.createElement('span');
+          department.className = 'tag';
+          department.textContent = student.department;
+          const memberType = document.createElement('span');
+          memberType.className = `tag ${student.memberType === 'New' ? 'new' : ''}`;
+          memberType.textContent = student.memberType;
+          tags.append(department, memberType);
+          row.append(checkbox, identity, tags);
+          list.appendChild(row);
+        });
+      }
+
+      search.addEventListener('input', render);
+      document.getElementById('clear').addEventListener('click', () => {
+        selected.clear();
+        updateCount();
+        render();
+      });
+      document.getElementById('cancel').addEventListener('click', () => google.script.host.close());
+      generate.addEventListener('click', () => {
+        generate.disabled = true;
+        status.textContent = 'Generating teams...';
+        google.script.run
+          .withSuccessHandler(() => google.script.host.close())
+          .withFailureHandler(error => {
+            generate.disabled = false;
+            status.textContent = error && error.message
+              ? error.message
+              : 'Teams could not be generated. Try again.';
+          })
+          .finalizeShuffleWithAbsent(data.preferredGroupSize, [...selected], data.sessionId);
+      });
+      render();
+    </script>
+  </body>
+</html>
