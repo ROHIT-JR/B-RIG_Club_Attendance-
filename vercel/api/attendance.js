@@ -46,6 +46,7 @@ const ACTION_SCHEMAS = {
     optionalStrings: {
       fullName: 80,
       officialEmail: 120,
+      gender: 16,
       userAgent: 250
     },
     booleans: ['isNewRegistration']
@@ -161,9 +162,15 @@ function validateAndSelectPayload(body) {
     payload[field] = body[field];
   }
 
+  if (body.action === 'submitAttendance' && Object.prototype.hasOwnProperty.call(body, 'gender') &&
+      !['Male', 'Female'].includes(body.gender)) {
+    return null;
+  }
+
   if (body.action === 'submitAttendance' && body.isNewRegistration) {
     if (typeof body.fullName !== 'string' || !body.fullName.trim() ||
-        typeof body.officialEmail !== 'string' || !body.officialEmail.trim()) {
+        typeof body.officialEmail !== 'string' || !body.officialEmail.trim() ||
+        !['Male', 'Female'].includes(body.gender)) {
       return null;
     }
   }

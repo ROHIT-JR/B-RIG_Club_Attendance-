@@ -16,6 +16,8 @@ function onOpen() {
     .addItem('Reset / Clear All Sessions', 'clearAllData')
     .addSeparator()
     .addItem('Setup / Initialise Workbook', 'initWorkbook')
+    .addItem('Check Gender Schema (Dry Run)', 'dryRunGenderSchemaUpgrade')
+    .addItem('Apply Gender Schema Upgrade', 'applyGenderSchemaUpgrade')
     .addToUi();
 }
 
@@ -27,7 +29,7 @@ function initWorkbook() {
 
   const sheetsConfig = [
     { name: CONFIG.SHEETS.DASHBOARD, headers: ['S.No', 'Name', 'Roll No'] },
-    { name: CONFIG.SHEETS.STUDENTS, headers: CONFIG.STUDENT_HEADERS },
+    { name: CONFIG.SHEETS.STUDENTS, headers: CONFIG.STUDENT_HEADERS, protectedUpgrade: CONFIG.GENDER.HEADER },
     { name: CONFIG.SHEETS.SESSIONS, headers: ['Session ID', 'Session Date', 'Session Title', 'Opens At', 'Closes At', 'Status', 'Token', 'Created At', 'Created By'] },
     { name: CONFIG.SHEETS.CHECKINS, headers: CONFIG.CHECKIN_HEADERS },
     { name: CONFIG.SHEETS.SETTINGS, headers: ['Setting', 'Value'] }
@@ -47,7 +49,9 @@ function initWorkbook() {
     if (currentHeaders.every(header => header === '')) {
       sheet.getRange(1, 1, 1, config.headers.length).setValues([config.headers]).setFontWeight('bold');
     } else {
-      const missingHeaders = config.headers.filter(header => !currentHeaders.includes(header));
+      const missingHeaders = config.headers.filter(header =>
+        !currentHeaders.includes(header) && header !== config.protectedUpgrade
+      );
       if (missingHeaders.length > 0) {
         sheet.getRange(1, currentHeaders.length + 1, 1, missingHeaders.length)
           .setValues([missingHeaders])
@@ -80,6 +84,96 @@ function initWorkbook() {
   sanitizeExistingCheckinUserAgents_();
 
   SpreadsheetApp.getUi().alert('Workbook initialised successfully.');
+}
+
+function dryRunGenderSchemaUpgrade() {
+  const report = DB.inspectStudentGenderSchema();
+  SpreadsheetApp.getUi().alert(formatGenderMigrationReport_(report, 'DRY RUN - no writes performed'));
+  return report;
+}
+
+function applyGenderSchemaUpgrade() {
+  const ui = SpreadsheetApp.getUi();
+  const preview = DB.inspectStudentGenderSchema();
+  if (preview.status === 'already_applied') {
+    ui.alert(formatGenderMigrationReport_(preview, 'Gender schema already applied - no changes made'));
+    return preview;
+  }
+  if (!preview.canApply) {
+    ui.alert(formatGenderMigrationReport_(preview, 'Gender schema migration blocked'));
+    return preview;
+  }
+  const confirmation = ui.alert(
+    'Apply Gender Schema Upgrade',
+    'A timestamped spreadsheet copy will be verified before one Gender header cell is appended. Continue?',
+    ui.ButtonSet.YES_NO
+  );
+  if (confirmation !== ui.Button.YES) return { status: 'cancelled' };
+  const result = applyGenderSchemaMigration_();
+  ui.alert(formatGenderMigrationReport_(result, result.verified ? 'Migration verified' : 'Migration failed'));
+  return result;
+}
+
+function applyGenderSchemaMigration_() {
+  return DB.withLock(() => {
+    const ss = getAttendanceSpreadsheet();
+    const before = DB.inspectStudentGenderSchema(ss);
+    if (before.status === 'already_applied') return { ...before, verified: true, noOp: true };
+    if (!before.canApply) return { ...before, verified: false };
+
+    const timestamp = Utilities.formatDate(new Date(), getSetting('Time zone') || 'Asia/Kolkata', 'yyyyMMdd-HHmmss');
+    const backup = ss.copy(`${ss.getName()} - Before Gender Migration ${timestamp}`);
+    const backupReport = DB.inspectStudentGenderSchema(backup);
+    if (backupReport.legacyDigest !== before.legacyDigest ||
+        backupReport.lastRow !== before.lastRow || backupReport.lastColumn !== before.lastColumn) {
+      throw new Error('Backup verification failed. The original spreadsheet was not changed.');
+    }
+
+    const revalidated = DB.inspectStudentGenderSchema(ss);
+    if (!revalidated.canApply || revalidated.legacyDigest !== before.legacyDigest ||
+        revalidated.sheetId !== before.sheetId) {
+      throw new Error('Students schema changed during backup. The original spreadsheet was not changed.');
+    }
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
+    const newColumn = before.lastColumn + 1;
+    if (newColumn > sheet.getMaxColumns()) sheet.insertColumnAfter(sheet.getMaxColumns());
+    sheet.getRange(1, newColumn).setValue(CONFIG.GENDER.HEADER).setFontWeight('bold');
+    SpreadsheetApp.flush();
+
+    const after = DB.inspectStudentGenderSchema(ss);
+    const preservedDigest = snapshotStudentRange_(sheet, before.lastColumn);
+    const verified = after.status === 'already_applied' &&
+      after.lastRow === before.lastRow && after.lastColumn === before.lastColumn + 1 &&
+      preservedDigest === before.legacyDigest;
+    return {
+      ...after,
+      verified,
+      backupId: backup.getId(),
+      backupUrl: backup.getUrl(),
+      beforeRows: before.lastRow,
+      beforeColumns: before.lastColumn,
+      preservedDigest
+    };
+  });
+}
+
+function formatGenderMigrationReport_(report, title) {
+  const lines = [
+    title,
+    `Status: ${report.status || 'unknown'}`,
+    `Rows: ${report.lastRow === undefined ? 'n/a' : report.lastRow}`,
+    `Columns: ${report.lastColumn === undefined ? 'n/a' : report.lastColumn}`,
+    `Proposed Gender column: ${report.proposedGenderColumn || 'n/a'}`,
+    `Rows with Gender: ${report.rowsWithGender || 0}`,
+    `Rows without Gender: ${report.rowsWithoutGender || 0}`,
+    `Unexpected Gender values: ${report.unexpectedGenderValues || 0}`,
+    `Duplicate keys: ${report.duplicateKeys || 0}`,
+    `Preservation digest: ${report.preservedDigest || report.legacyDigest || 'n/a'}`
+  ];
+  if (report.backupId) lines.push(`Verified backup ID: ${report.backupId}`);
+  if (report.backupUrl) lines.push(`Verified backup URL: ${report.backupUrl}`);
+  if (report.errors && report.errors.length) lines.push(`Blocked by: ${report.errors.join(' ')}`);
+  return lines.join('\n');
 }
 
 /**
@@ -472,6 +566,7 @@ function doPost(e) {
           requireApiString_(request.rollNumber, 32),
           optionalApiString_(request.fullName, 80),
           optionalApiString_(request.officialEmail, 120),
+          optionalApiString_(request.gender, 16),
           request.isNewRegistration,
           requireApiString_(request.deviceId, 64),
           optionalApiString_(request.userAgent, 250),
@@ -603,7 +698,17 @@ function validateRollNo(rollNumber, sessionToken, deviceId, accessGrant) {
   const student = DB.getStudentByRollNo(normalizedRollNo);
   const activeStatus = CONFIG.STATUS.STUDENT.ACTIVE.toUpperCase();
   if (student && (!student.status || String(student.status).trim().toUpperCase() === activeStatus)) {
-    return { valid: true, exists: true, fullName: student.fullName, rollNumber: student.rollNumber };
+    const storedGender = String(student.gender || '');
+    if (storedGender && normalizeGender(storedGender) !== storedGender) {
+      return attendanceError_('INVALID_GENDER', 'Your profile needs administrator review before attendance can be recorded.');
+    }
+    return {
+      valid: true,
+      exists: true,
+      fullName: student.fullName,
+      rollNumber: student.rollNumber,
+      genderRequired: !storedGender
+    };
   }
   if (student) {
     return { valid: false, error: 'Your registration is awaiting administrator approval.' };
@@ -614,7 +719,7 @@ function validateRollNo(rollNumber, sessionToken, deviceId, accessGrant) {
 /**
  * Securely records attendance.
  */
-function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, isNewRegistration, deviceId, userAgent, accessGrant) {
+function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, gender, isNewRegistration, deviceId, userAgent, accessGrant) {
   if (!sessionToken || !rollNumber) {
     return { success: false, error: 'Missing required information.' };
   }
@@ -640,6 +745,13 @@ function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, isN
       success: false,
       error: `Use your official college email: ${getOfficialEmailForRollNo(normalizedRollNo)}.`
     };
+  }
+  const submittedGender = normalizeGender(gender);
+  if (String(gender || '').trim() && !submittedGender) {
+    return attendanceError_('INVALID_GENDER', 'Select Male or Female.');
+  }
+  if (isNewRegistration && !submittedGender) {
+    return attendanceError_('GENDER_REQUIRED', 'Select Male or Female to continue.');
   }
 
   const deviceHash = hashDeviceId(String(deviceId));
@@ -711,6 +823,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, isN
       studentRow[studentHeaders.indexOf('Registered At')] = now;
       studentRow[studentHeaders.indexOf('Created By')] = 'System';
       studentRow[studentHeaders.indexOf('Official Email')] = officialEmail;
+      studentRow[studentHeaders.indexOf(CONFIG.GENDER.HEADER)] = submittedGender;
       studentsSheet.appendRow(studentRow);
 
       // Add to dashboard
@@ -728,6 +841,17 @@ function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, isN
       const activeStatus = CONFIG.STATUS.STUDENT.ACTIVE.toUpperCase();
       if (student.status && String(student.status).trim().toUpperCase() !== activeStatus) {
         return { success: false, error: 'Student status is not active.' };
+      }
+      const storedGender = String(student.gender || '');
+      if (storedGender && normalizeGender(storedGender) !== storedGender) {
+        return attendanceError_('INVALID_GENDER', 'Your profile needs administrator review before attendance can be recorded.');
+      }
+      if (!storedGender) {
+        if (!submittedGender) {
+          return attendanceError_('GENDER_REQUIRED', 'Select Male or Female to continue.');
+        }
+        studentsSheet.getRange(student.row, studentHeaders.indexOf(CONFIG.GENDER.HEADER) + 1)
+          .setValue(submittedGender);
       }
       fullName = student.fullName || fullName; // use trusted name if exists
       // Find row in dashboard
@@ -793,6 +917,10 @@ function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, isN
 
     return { success: true };
   });
+}
+
+function attendanceError_(code, message, retryable) {
+  return { success: false, valid: false, code, error: message, retryable: retryable === true };
 }
 
 /**

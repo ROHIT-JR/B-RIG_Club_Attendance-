@@ -6,6 +6,7 @@
   const ROLL_NUMBER_MIN_LENGTH = 8;
   const ROLL_NUMBER_MAX_LENGTH = 32;
   const OFFICIAL_EMAIL_DOMAIN = 'cb.students.amrita.edu';
+  const GENDER_VALUES = ['Male', 'Female'];
   const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const DEVICE_STORAGE_KEY = 'brig_device_id';
   const ATTENDANCE_RECEIPT_PREFIX = 'brig_attended_';
@@ -26,6 +27,8 @@
     rollNumber: '',
     fullName: '',
     officialEmail: '',
+    gender: '',
+    genderRequired: false,
     deviceId: getOrCreateDeviceId()
   };
 
@@ -54,6 +57,8 @@
     confirmAvatar: document.getElementById('confirm-avatar'),
     confirmName: document.getElementById('confirm-name'),
     confirmRoll: document.getElementById('confirm-roll'),
+    confirmGenderGroup: document.getElementById('confirm-gender-group'),
+    confirmGender: document.getElementById('confirmGender'),
     formConfirm: document.getElementById('form-confirm'),
     confirmError: document.getElementById('confirm-error'),
     btnConfirmAttendance: document.getElementById('btn-confirm-attendance'),
@@ -62,6 +67,7 @@
     regRollNumber: document.getElementById('regRollNumber'),
     regFullName: document.getElementById('regFullName'),
     regOfficialEmail: document.getElementById('regOfficialEmail'),
+    regGender: document.getElementById('regGender'),
     officialEmailHint: document.getElementById('official-email-hint'),
     registerError: document.getElementById('register-error'),
     btnRegisterAttendance: document.getElementById('btn-register-attendance'),
@@ -289,10 +295,16 @@
     state.rollNumber = '';
     state.fullName = '';
     state.officialEmail = '';
+    state.gender = '';
+    state.genderRequired = false;
     elements.rollNumber.value = '';
     elements.regRollNumber.value = '';
     elements.regFullName.value = '';
     elements.regOfficialEmail.value = '';
+    elements.regGender.value = '';
+    elements.confirmGender.value = '';
+    elements.confirmGenderGroup.classList.add('hidden');
+    elements.confirmGender.required = false;
     hideError(elements.rollError);
     hideError(elements.confirmError);
     hideError(elements.registerError);
@@ -367,7 +379,7 @@
     setButtonLoading(button, true, label);
     backButton.disabled = true;
     try {
-      const response = await postAttendance({
+      const payload = {
         action: 'submitAttendance',
         sessionToken: state.sessionToken,
         rollNumber: state.rollNumber,
@@ -377,7 +389,9 @@
         deviceId: state.deviceId,
         userAgent: navigator.userAgent.slice(0, 250),
         accessGrant: state.accessGrant
-      });
+      };
+      if (state.gender) payload.gender = state.gender;
+      const response = await postAttendance(payload);
       handleAttendanceResponse(response, errorElement);
     } catch (error) {
       const retryMessage = error.retryable
@@ -449,6 +463,8 @@
       state.rollNumber = response.rollNumber || rollNumber;
       if (response.exists) {
         state.fullName = response.fullName || '';
+        state.gender = '';
+        state.genderRequired = response.genderRequired === true;
         if (!state.fullName) {
           showError(elements.rollError, 'Your student profile could not be loaded. Please try again.');
           return;
@@ -456,15 +472,20 @@
         elements.confirmName.textContent = state.fullName;
         elements.confirmRoll.textContent = state.rollNumber;
         elements.confirmAvatar.textContent = state.fullName.charAt(0).toUpperCase();
-        showView('confirm', elements.btnConfirmAttendance);
+        elements.confirmGenderGroup.classList.toggle('hidden', !state.genderRequired);
+        elements.confirmGender.required = state.genderRequired;
+        elements.confirmGender.value = '';
+        showView('confirm', state.genderRequired ? elements.confirmGender : elements.btnConfirmAttendance);
         return;
       }
 
       state.fullName = '';
       state.officialEmail = '';
+      state.gender = '';
       elements.regRollNumber.value = state.rollNumber;
       elements.regFullName.value = '';
       elements.regOfficialEmail.value = '';
+      elements.regGender.value = '';
       const expectedEmail = `${state.rollNumber.toLowerCase()}@${OFFICIAL_EMAIL_DOMAIN}`;
       elements.regOfficialEmail.placeholder = expectedEmail;
       elements.officialEmailHint.textContent = `Required format: ${expectedEmail}`;
@@ -482,6 +503,15 @@
   elements.formConfirm.addEventListener('submit', event => {
     event.preventDefault();
     hideError(elements.confirmError);
+    if (state.genderRequired) {
+      const gender = elements.confirmGender.value;
+      if (!GENDER_VALUES.includes(gender)) {
+        showError(elements.confirmError, 'Select Male or Female to continue.');
+        elements.confirmGender.focus();
+        return;
+      }
+      state.gender = gender;
+    }
     submitAttendance(
       false,
       elements.confirmError,
@@ -510,8 +540,16 @@
       return;
     }
 
+    const gender = elements.regGender.value;
+    if (!GENDER_VALUES.includes(gender)) {
+      showError(elements.registerError, 'Select Male or Female to continue.');
+      elements.regGender.focus();
+      return;
+    }
+
     state.fullName = fullName;
     state.officialEmail = officialEmail;
+    state.gender = gender;
     submitAttendance(
       true,
       elements.registerError,

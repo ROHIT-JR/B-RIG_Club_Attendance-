@@ -40,7 +40,7 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 - [ ] Run **Club Attendance > Setup / Initialise Workbook**.
 - [ ] `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings` exist.
 - [ ] Re-running setup preserves records except that formula-like historical `User Agent` cells are converted to safe text.
-- [ ] `Students` has the standard first seven identity headers and a separate `Official Email` header.
+- [ ] `Students` has the standard first seven identity headers plus separate canonical `Official Email` and `Gender` headers.
 - [ ] `Checkins` has exactly these first ten headers in order: `Checkin ID`, `Timestamp`, `Session ID`, `Session Date`, `Roll Number`, `Full Name`, `Result`, `Source`, `User Agent`, `Device ID`.
 - [ ] Apps Script Script Properties contains the `SPREADSHEET_ID` recorded by workbook setup.
 - [ ] `Student Web App URL` contains only the stable Vercel/custom root HTTPS origin.
@@ -100,13 +100,14 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 
 - [ ] Create `Week 1` and scan its live QR with a normal persistent browser.
 - [ ] Enter an unknown valid roll.
-- [ ] The app requests the student's full official name and official college email.
+- [ ] The app requests the student's full official name, official college email, and Gender in the order Male then Female.
+- [ ] Blank, forged, lowercase, `Prefer not to say`, and other Gender values are rejected; only exact `Male` and `Female` reach Apps Script.
 - [ ] Empty, one-character, control-character, and formula-like names are rejected.
 - [ ] For `CB.SC.U4CYS25048`, enter `cb.sc.u4cys25048@cb.students.amrita.edu`. It is accepted.
 - [ ] Enter an email with a different roll number. It is rejected.
 - [ ] Enter the correct roll local part with another domain. It is rejected.
 - [ ] Submit a valid name and matching official email, then reach the success screen.
-- [ ] The `Students` row contains the normalized roll, name, official email, expected Active/Pending status, and timestamp.
+- [ ] The `Students` row contains the normalized roll, name, official email, Gender, expected Active/Pending status, and timestamp.
 - [ ] The `Checkins` row contains the session, roll, submitted registration name, source, sanitized user agent, and a 64-character device hash.
 - [ ] Neither `Checkins` nor `Attendance Dashboard` contains the official email.
 - [ ] The raw browser UUID is not present in the Sheet.
@@ -120,6 +121,9 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 - [ ] Create `Week 2`. The dashboard adds a new session column and marks existing students `A`.
 - [ ] Scan the fresh Week 2 QR and enter the registered roll.
 - [ ] The confirmation view displays the Sheet's trusted student name and roll.
+- [ ] A legacy student with blank Gender is prompted once; a valid choice is stored before attendance confirmation.
+- [ ] Revisit that student in another session. The Gender prompt is absent and the stored value is not exposed.
+- [ ] A student with an unexpected nonblank Gender value is blocked for administrator review rather than overwritten.
 - [ ] Select **Confirm attendance** and reach success.
 - [ ] The dashboard changes the Week 2 value from `A` to `P`.
 - [ ] Exactly one `Checkins` row is created for the submission.
@@ -136,6 +140,19 @@ The suite does not deploy Apps Script, configure Vercel, access a real Sheet, te
 - [ ] Submit two different valid rolls simultaneously from two phones. Both serialize safely without corrupting rows.
 
 The browser UUID is a deterrent rather than hardware identity. Clearing all site data, changing browsers, or using another device can create a different UUID; this limitation is expected.
+
+## Weekly Shuffle
+
+- [ ] Latest-session `P` students and only explicitly selected `A` students appear exactly once; participation source is preserved.
+- [ ] A same-day/bulk-registered participant with an earlier `P` is Existing. A participant with only blanks, `A`, or pre-registration markers before the latest session is New.
+- [ ] First-session and all-new populations report the resulting feasibility limitation without misclassification.
+- [ ] Group count equals the preferred-size base unless genuine-new separation requires more groups; Female or department coverage never adds groups.
+- [ ] Enough Female participants yields one Female-covered team per feasible target; fewer Female participants yields maximum coverage and the correct numerator/target.
+- [ ] `Male` and blank/unknown Gender never count as Female coverage.
+- [ ] Multidisciplinary achieved/target counts match the final department assignments, including dominant, single, and unknown-department cases.
+- [ ] New-member teams receive experienced members wherever the population allows; unsupported team count is accurate.
+- [ ] The output shows size range, genuine-new/experienced counts, source totals, coverage targets, deterministic seed, and truthful warnings without showing per-person Gender.
+- [ ] Repeating a controlled run with the same session, participants, history, and seed produces the same assignment.
 
 ## Session Administration
 
@@ -173,6 +190,11 @@ The browser UUID is a deterrent rather than hardware identity. Clearing all site
 ## Upgrade and Legacy Removal
 
 - [ ] Upgrade a copy of an existing workbook and run initialization.
+- [ ] Run **Check Gender Schema (Dry Run)** and record dimensions, counts, anomalies, and digest; verify it creates no backup and writes nothing.
+- [ ] Dry run blocks normalized duplicate/variant Gender headers, duplicate roll keys, formula/blank headers, and unexpected Gender values.
+- [ ] Run **Apply Gender Schema Upgrade** on the copy. Verify a timestamped backup is created before exactly one `Gender` header write.
+- [ ] Run apply again. It is a no-op with no second backup.
+- [ ] Compare pre/post Students row order, keys, formulas, non-Gender values, session headers, historical/current attendance values, and current meeting count.
 - [ ] Existing students, sessions, check-ins, custom settings, and dashboard values remain intact except for the documented historical `User Agent` safety rewrite.
 - [ ] Missing `Student Web App URL` and `Device ID` fields are added without reordering data.
 - [ ] Formula-like values in historical `User Agent` cells are neutralized as text during initialization.
