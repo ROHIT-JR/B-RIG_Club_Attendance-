@@ -36,7 +36,7 @@ test('Apps Script keeps admin QR rotation and locked attendance writes', () => {
   assert.match(code, /hashDeviceId/);
   assert.match(code, /sanitizeSpreadsheetText_\(userAgent/);
   assert.match(code, /Official Email/);
-  assert.match(code, /getOfficialEmailForRollNo/);
+  assert.match(config, /getOfficialEmailForRollNo/);
   assert.match(code, /getFormulas\(\)/);
   assert.match(config, /SPREADSHEET_ID/);
   assert.match(config, /SpreadsheetApp\.openById/);
@@ -112,4 +112,11 @@ test('Gender migration is explicit, locked, backed up, and preservation-verified
   assert.match(code, /preservedDigest/);
   assert.doesNotMatch(code, /DriveApp/);
   assert.match(database, /inspectStudentGenderSchema/);
+});
+
+test('team College Email output remains administrator-only', () => {
+  const publicSurface = [read('vercel/index.html'), read('vercel/app.js'), read('vercel/api/attendance.js')].join('\n');
+  assert.doesNotMatch(publicSurface, /Team mailing list|Female-Covered Teams|Expected Team Capacities/);
+  assert.match(read('Shuffle.js'), /College Email/);
+  assert.match(read('Shuffle.js'), /Team mailing list/);
 });

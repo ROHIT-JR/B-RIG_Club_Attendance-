@@ -104,10 +104,7 @@
           const department = document.createElement('span');
           department.className = 'tag';
           department.textContent = student.department;
-          const memberType = document.createElement('span');
-          memberType.className = `tag ${student.memberType === 'New' ? 'new' : ''}`;
-          memberType.textContent = student.memberType;
-          tags.append(department, memberType);
+          tags.append(department);
           row.append(checkbox, identity, tags);
           list.appendChild(row);
         });

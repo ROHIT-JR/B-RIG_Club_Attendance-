@@ -486,9 +486,8 @@
       elements.regFullName.value = '';
       elements.regOfficialEmail.value = '';
       elements.regGender.value = '';
-      const expectedEmail = `${state.rollNumber.toLowerCase()}@${OFFICIAL_EMAIL_DOMAIN}`;
-      elements.regOfficialEmail.placeholder = expectedEmail;
-      elements.officialEmailHint.textContent = `Required format: ${expectedEmail}`;
+      elements.regOfficialEmail.placeholder = `your.roll@${OFFICIAL_EMAIL_DOMAIN}`;
+      elements.officialEmailHint.textContent = 'The email must exactly match your university roll number.';
       showView('register', elements.regFullName);
     } catch (error) {
       const retryMessage = error.retryable
@@ -535,7 +534,7 @@
     const officialEmail = elements.regOfficialEmail.value.trim().toLowerCase();
     const expectedEmail = `${state.rollNumber.toLowerCase()}@${OFFICIAL_EMAIL_DOMAIN}`;
     if (officialEmail !== expectedEmail) {
-      showError(elements.registerError, `Use your official college email: ${expectedEmail}.`);
+      showError(elements.registerError, 'Use the official college email that exactly matches your roll number.');
       elements.regOfficialEmail.focus();
       return;
     }
