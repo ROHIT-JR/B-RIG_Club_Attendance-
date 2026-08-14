@@ -15,10 +15,18 @@ const CONFIG = {
     GRANT_LIFETIME_SECONDS: 300
   },
   DEVICE_ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  STUDENT_HEADERS: [
+  STUDENT_BASE_HEADERS: [
     'Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At',
     'Created By', 'Notes', 'Official Email'
   ],
+  STUDENT_HEADERS: [
+    'Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At',
+    'Created By', 'Notes', 'Official Email', 'Gender'
+  ],
+  GENDER: {
+    HEADER: 'Gender',
+    VALUES: ['Male', 'Female']
+  },
   CHECKIN_HEADERS: [
     'Checkin ID', 'Timestamp', 'Session ID', 'Session Date', 'Roll Number',
     'Full Name', 'Result', 'Source', 'User Agent', 'Device ID'
@@ -134,6 +142,16 @@ function isValidFullName(fullName) {
     !/^[=+@-]/.test(normalized) &&
     !/@/.test(normalized) &&
     !/[\u0000-\u001f\u007f]/.test(normalized);
+}
+
+function normalizeGender(gender) {
+  const normalized = String(gender || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const match = CONFIG.GENDER.VALUES.find(value => value.toLowerCase() === normalized);
+  return match || '';
+}
+
+function isValidGender(gender) {
+  return Boolean(normalizeGender(gender));
 }
 
 /**

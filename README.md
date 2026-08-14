@@ -187,11 +187,13 @@ Return to the Apps Script editor and refresh it. Confirm the five files are pres
 5. Wait for the **Workbook initialised successfully** alert.
 6. Confirm that the following tabs now exist: `Attendance Dashboard`, `Students`, `Sessions`, `Checkins`, and `Settings`.
 7. Open `Checkins` and confirm the exact ordered headers are `Checkin ID`, `Timestamp`, `Session ID`, `Session Date`, `Roll Number`, `Full Name`, `Result`, `Source`, `User Agent`, and `Device ID`.
-8. Open `Students` and confirm `Official Email` is the final header.
+8. Open `Students` and confirm `Official Email` and `Gender` are separate headers. New workbooks create both; existing workbooks require the controlled Gender migration below.
 9. Open `Settings` and confirm that `Student Web App URL` exists. Leave its placeholder unchanged until Vercel is deployed.
 10. Return to Apps Script **Project Settings > Script Properties** and confirm setup created `SPREADSHEET_ID`.
 
 Initialization is safe to rerun when upgrading. It appends missing settings and headers without deleting attendance records, although it neutralizes formula-like historical `User Agent` values as safe text. It does not rearrange a damaged schema, so always verify the exact `Checkins` order after a repair. Do not rename required tabs or standard headers.
+
+`Gender` is intentionally excluded from automatic upgrades of an existing `Students` sheet. Use **Check Gender Schema (Dry Run)** and **Apply Gender Schema Upgrade** so a verified timestamped spreadsheet copy exists before the single header write.
 
 `SPREADSHEET_ID` lets the deployed web app open the bound workbook when Google provides no active spreadsheet context. Do not copy an ID from another workbook or delete this property in production. Setup can append a missing header, but it cannot safely repair a renamed or reordered standard column; compare the full order above before deployment.
 
@@ -558,6 +560,34 @@ npm audit
 Do not deploy unless tests pass and the audit result is understood.
 
 Treat the Sheet copy as a data backup. Restoring into the original workbook preserves its bound Apps Script project and deployment. Promoting the copy as production requires a new Clasp binding, Script Properties, Apps Script deployment, Vercel environment update, and redeployment.
+
+### Controlled Gender schema migration
+
+Gender is stored only in `Students` with the exact allowed values `Male` or `Female`. Legacy rows remain blank until the student supplies the value at a later attendance. The system never infers Gender and never copies it into `Checkins` or `Attendance Dashboard`.
+
+Run this procedure with all sessions closed and manual Sheet edits frozen:
+
+1. Upload the Apps Script source to the bound project, but do not publish the new web-app version yet.
+2. Refresh the Sheet and select **Club Attendance > Check Gender Schema (Dry Run)**.
+3. Record the reported row count, column count, proposed column, blank/valid/unexpected counts, duplicate-key count, and preservation digest. The dry run performs no writes and creates no copy.
+4. Stop if the report is blocked. Resolve renamed, duplicate, blank, formula-based, or noncanonical headers; duplicate roll keys; or unexpected existing Gender values manually on a copy first.
+5. Select **Club Attendance > Apply Gender Schema Upgrade** and confirm the operation.
+6. Record the verified backup spreadsheet ID and URL. The apply path uses the attendance script lock, verifies the backup, revalidates the original, writes only the new `Gender` header cell, flushes, and compares the legacy range digest and dimensions.
+7. Run the dry run again. It must report `already_applied`, one canonical `Gender` header, unchanged row count, and no unexpected values.
+8. Compare `Students` keys/order/formulas, all `Attendance Dashboard` session headers and values, `Sessions`, `Checkins`, and the current meeting counts against the pre-migration copy.
+
+The operation is idempotent: a second apply creates no backup and performs no write. Do not populate legacy Gender cells in bulk.
+
+Rollback is operator-controlled. If verification fails, close attendance, retain the original and generated backup, compare the reported digests and exact affected cells, and obtain explicit approval before restoring. If the only verified change is the blank `Gender` header, clear only that cell. If legacy content differs, restore the affected cells from the verified backup into the original workbook; do not automatically promote the copied workbook because its binding, Script Properties, deployment URL, and Vercel configuration differ.
+
+### Gender-aware attendance and Shuffle
+
+- Existing students with a blank Gender see one required `Male` then `Female` choice before confirmation. A valid stored value skips the prompt on future attendance.
+- New registrations require the same choice. The Apps Script server re-reads and writes the student row by normalized roll under `LockService`; it never overwrites a nonblank valid value.
+- If Gender saves but a later attendance write fails, attendance is not reported as confirmed. Retrying skips Gender and safely retries attendance through existing duplicate enforcement.
+- Shuffle participants remain latest-session `P` plus explicitly selected `A` students. `New` now means no `P` in any validated session strictly before the latest session; registration date is not used.
+- Group count is `max(ceil(participants / preferred strength), genuine new count)`. Gender and department objectives never increase it.
+- The seeded candidate search prioritizes exact membership, one genuine newcomer per team, experienced support, Female coverage, multidisciplinary coverage, balanced size, and repeat avoidance. Output reports achieved/target coverage, warnings, participation sources, and the PRNG seed without exposing per-person Gender. Reproduction requires the same participant metadata and Shuffle history as well as the displayed seed.
 
 ### Step 2: Upload Apps Script changes
 

@@ -83,3 +83,33 @@ test('Vercel proxy applies request limits and leaves enough time for Apps Script
   assert.match(browser, /REQUEST_TIMEOUT_MS = 30000/);
   assert.match(browser, /configurationError/);
 });
+
+test('Gender collection is one-time, restricted to Male and Female, and server-authoritative', () => {
+  const html = read('vercel/index.html');
+  const browser = read('vercel/app.js');
+  const proxy = read('vercel/api/attendance.js');
+  const config = read('Config.js');
+  const code = read('Code.js');
+
+  assert.match(html, /id="confirm-gender-group"/);
+  assert.match(html, /id="regGender"[^>]*required/);
+  assert.ok(html.indexOf('value="Male"') < html.indexOf('value="Female"'));
+  assert.doesNotMatch(html + browser + proxy + config, /Prefer not to say/);
+  assert.match(browser, /genderRequired/);
+  assert.match(proxy, /\['Male', 'Female'\]/);
+  assert.match(code, /GENDER_REQUIRED/);
+  assert.match(code, /studentsSheet\.getRange\(student\.row/);
+});
+
+test('Gender migration is explicit, locked, backed up, and preservation-verified', () => {
+  const code = read('Code.js');
+  const database = read('Database.js');
+  assert.match(code, /dryRunGenderSchemaUpgrade/);
+  assert.match(code, /applyGenderSchemaUpgrade/);
+  assert.match(code, /DB\.withLock/);
+  assert.match(code, /ss\.copy/);
+  assert.match(code, /SpreadsheetApp\.flush/);
+  assert.match(code, /preservedDigest/);
+  assert.doesNotMatch(code, /DriveApp/);
+  assert.match(database, /inspectStudentGenderSchema/);
+});

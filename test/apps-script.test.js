@@ -16,7 +16,7 @@ const ROLL_NUMBER = 'CB.SC.U4CYS25048';
 const OFFICIAL_EMAIL = 'cb.sc.u4cys25048@cb.students.amrita.edu';
 const STUDENT_HEADERS = [
   'Student ID', 'Roll Number', 'Full Name', 'Status', 'Registered At',
-  'Created By', 'Notes', 'Official Email'
+  'Created By', 'Notes', 'Official Email', 'Gender'
 ];
 
 function createOutput(content) {
@@ -316,7 +316,8 @@ test('preserves registered, unknown, and invalid roll validation', () => {
   harness.db.getStudentByRollNo = () => ({
     rollNumber: ROLL_NUMBER,
     fullName: 'Registered Student',
-    status: 'Active'
+    status: 'Active',
+    gender: 'Male'
   });
   const registered = harness.call(
     'validateRollNo', ROLL_NUMBER.toLowerCase(), harness.session.token, DEVICE_ID, details.accessGrant
@@ -324,6 +325,31 @@ test('preserves registered, unknown, and invalid roll validation', () => {
   assert.equal(registered.valid, true);
   assert.equal(registered.exists, true);
   assert.equal(registered.rollNumber, ROLL_NUMBER);
+  assert.equal(registered.genderRequired, false);
+
+  harness.db.getStudentByRollNo = () => ({
+    rollNumber: ROLL_NUMBER,
+    fullName: 'Legacy Student',
+    status: 'Active',
+    gender: ''
+  });
+  const legacy = harness.call(
+    'validateRollNo', ROLL_NUMBER, harness.session.token, DEVICE_ID, details.accessGrant
+  );
+  assert.equal(legacy.valid, true);
+  assert.equal(legacy.genderRequired, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(legacy, 'gender'), false);
+
+  harness.db.getStudentByRollNo = () => ({
+    rollNumber: ROLL_NUMBER,
+    fullName: 'Noncanonical Student',
+    status: 'Active',
+    gender: 'male'
+  });
+  const noncanonical = harness.call(
+    'validateRollNo', ROLL_NUMBER, harness.session.token, DEVICE_ID, details.accessGrant
+  );
+  assert.equal(noncanonical.code, 'INVALID_GENDER');
 
   harness.db.getStudentByRollNo = () => null;
   const unknown = harness.call(
@@ -369,19 +395,13 @@ test('derives and validates the official college email from the roll number', ()
   assert.equal(harness.call('isValidOfficialEmail', `${ROLL_NUMBER.toLowerCase()}@example.com`, ROLL_NUMBER), false);
 });
 
-test('appends the dedicated official-email header during runtime schema enforcement', () => {
-  const headers = STUDENT_HEADERS.slice(0, -1);
+test('runtime schema validation requires the explicit Gender migration', () => {
+  const headers = STUDENT_HEADERS.slice();
   const sheet = {
     getLastColumn: () => headers.length,
     getRange(row, column) {
       if (row === 1 && column === 1) return { getValues: () => [[...headers]] };
-      return {
-        setValue(value) {
-          headers[column - 1] = value;
-          return this;
-        },
-        setFontWeight() { return this; }
-      };
+       return {};
     }
   };
   const context = vm.createContext({
@@ -396,7 +416,8 @@ test('appends the dedicated official-email header during runtime schema enforcem
   const result = vm.runInContext('DB.ensureStudentSchema()', context);
 
   assert.deepEqual([...result], STUDENT_HEADERS);
-  assert.equal(headers[7], 'Official Email');
+  headers.pop();
+  assert.throws(() => vm.runInContext('DB.ensureStudentSchema()', context), /Gender schema migration/);
 });
 
 function createSubmitHarness(options = {}) {
@@ -418,7 +439,16 @@ function createSubmitHarness(options = {}) {
 
   const sheets = {
     Students: {
-      appendRow: row => studentRows.push(row)
+      appendRow: row => studentRows.push(row),
+      getRange(row, column) {
+        return {
+          setValue(value) {
+            if (options.failGenderWrite) throw new Error('gender write failed');
+            if (options.student && row === options.student.row) options.student.gender = value;
+            return this;
+          }
+        };
+      }
     },
     'Attendance Dashboard': {
       appendRow(row) { dashboardRows.push(row); },
@@ -430,6 +460,7 @@ function createSubmitHarness(options = {}) {
           getNotes: () => column === 4 ? [[session.sessionId]] : [['']],
           getValues: () => row === 1 && column === 4 ? [['07-08-2026']] : [[dashboardRows[row - 1]?.[column - 1]]],
           setValue(value) {
+            if (options.failDashboardMark && row > 1 && column === 4) throw new Error('dashboard write failed');
             marks.push({ row, column, value });
             while (dashboardRows[row - 1].length < column) dashboardRows[row - 1].push('');
             dashboardRows[row - 1][column - 1] = value;
@@ -457,16 +488,16 @@ function createSubmitHarness(options = {}) {
   };
   const harness = createHarness({ db, session, SpreadsheetApp });
   const grant = harness.call('issueAccessGrant_', session.token, DEVICE_ID);
-  return { checkins, dashboardRows, grant, harness, marks, studentRows };
+  return { checkins, dashboardRows, grant, harness, marks, options, student: options.student, studentRows };
 }
 
 test('records existing-student attendance and stores only the hashed device ID', () => {
   const environment = createSubmitHarness({
-    student: { rollNumber: ROLL_NUMBER, fullName: 'Registered Student', status: 'Active' }
+    student: { rollNumber: ROLL_NUMBER, fullName: 'Registered Student', status: 'Active', gender: 'Male', row: 2 }
   });
   const result = environment.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, 'Untrusted Name', '', false, DEVICE_ID, '=IMPORTDATA("https://example.test")', environment.grant
+    'session-token', ROLL_NUMBER, 'Untrusted Name', '', '', false, DEVICE_ID, '=IMPORTDATA("https://example.test")', environment.grant
   );
 
   assert.equal(result.success, true);
@@ -483,7 +514,7 @@ test('registers a new student and records attendance', () => {
   const environment = createSubmitHarness();
   const result = environment.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, 'New Student', OFFICIAL_EMAIL, true, DEVICE_ID, 'test-agent', environment.grant
+    'session-token', ROLL_NUMBER, 'New Student', OFFICIAL_EMAIL, 'Male', true, DEVICE_ID, 'test-agent', environment.grant
   );
 
   assert.equal(result.success, true);
@@ -491,8 +522,80 @@ test('registers a new student and records attendance', () => {
   assert.equal(environment.studentRows[0][1], ROLL_NUMBER);
   assert.equal(environment.studentRows[0][2], 'New Student');
   assert.equal(environment.studentRows[0][7], OFFICIAL_EMAIL);
+  assert.equal(environment.studentRows[0][8], 'Male');
   assert.equal(environment.dashboardRows.flat().includes(OFFICIAL_EMAIL), false);
   assert.equal(environment.checkins.flat().includes(OFFICIAL_EMAIL), false);
+  assert.equal(environment.checkins.length, 1);
+});
+
+test('collects missing Gender once and ignores supplied Gender for a completed profile', () => {
+  const legacy = createSubmitHarness({
+    student: { rollNumber: ROLL_NUMBER, fullName: 'Legacy Student', status: 'Active', gender: '', row: 2 }
+  });
+  const collected = legacy.harness.call(
+    'submitAttendance',
+    'session-token', ROLL_NUMBER, '', '', 'Female', false, DEVICE_ID, 'test-agent', legacy.grant
+  );
+  assert.equal(collected.success, true);
+  assert.equal(legacy.student.gender, 'Female');
+  assert.equal(legacy.checkins.length, 1);
+
+  const completed = createSubmitHarness({
+    student: { rollNumber: ROLL_NUMBER, fullName: 'Student', status: 'Active', gender: 'Male', row: 2 }
+  });
+  const ignored = completed.harness.call(
+    'submitAttendance',
+    'session-token', ROLL_NUMBER, '', '', 'Female', false, DEVICE_ID, 'test-agent', completed.grant
+  );
+  assert.equal(ignored.success, true);
+  assert.equal(completed.student.gender, 'Male');
+  assert.equal(completed.checkins.length, 1);
+});
+
+test('requires only Male or Female and does not confirm attendance when Gender persistence fails', () => {
+  for (const gender of ['', 'Prefer not to say', 'Other']) {
+    const environment = createSubmitHarness();
+    const result = environment.harness.call(
+      'submitAttendance',
+      'session-token', ROLL_NUMBER, 'New Student', OFFICIAL_EMAIL, gender,
+      true, DEVICE_ID, 'test-agent', environment.grant
+    );
+    assert.equal(result.success, false);
+    assert.match(result.code, /GENDER_REQUIRED|INVALID_GENDER/);
+    assert.equal(environment.studentRows.length, 0);
+    assert.equal(environment.checkins.length, 0);
+  }
+
+  const failed = createSubmitHarness({
+    student: { rollNumber: ROLL_NUMBER, fullName: 'Legacy Student', status: 'Active', gender: '', row: 2 },
+    failGenderWrite: true
+  });
+  assert.throws(() => failed.harness.call(
+    'submitAttendance',
+    'session-token', ROLL_NUMBER, '', '', 'Male', false, DEVICE_ID, 'test-agent', failed.grant
+  ), /gender write failed/);
+  assert.equal(failed.checkins.length, 0);
+});
+
+test('attendance remains unconfirmed when a later write fails after Gender is saved', () => {
+  const environment = createSubmitHarness({
+    student: { rollNumber: ROLL_NUMBER, fullName: 'Legacy Student', status: 'Active', gender: '', row: 2 },
+    failDashboardMark: true
+  });
+  assert.throws(() => environment.harness.call(
+    'submitAttendance',
+    'session-token', ROLL_NUMBER, '', '', 'Female', false, DEVICE_ID, 'test-agent', environment.grant
+  ), /dashboard write failed/);
+  assert.equal(environment.student.gender, 'Female');
+  assert.equal(environment.checkins.length, 0);
+
+  environment.options.failDashboardMark = false;
+  const retry = environment.harness.call(
+    'submitAttendance',
+    'session-token', ROLL_NUMBER, '', '', '', false, DEVICE_ID, 'test-agent', environment.grant
+  );
+  assert.equal(retry.success, true);
+  assert.equal(environment.student.gender, 'Female');
   assert.equal(environment.checkins.length, 1);
 });
 
@@ -501,7 +604,7 @@ test('rejects first-time registration when official email does not match the rol
   const result = environment.harness.call(
     'submitAttendance',
     'session-token', ROLL_NUMBER, 'New Student',
-    'cb.sc.u4cys25049@cb.students.amrita.edu', true, DEVICE_ID, 'test-agent', environment.grant
+    'cb.sc.u4cys25049@cb.students.amrita.edu', 'Male', true, DEVICE_ID, 'test-agent', environment.grant
   );
 
   assert.equal(result.success, false);
@@ -513,7 +616,7 @@ test('rejects first-time registration when official email does not match the rol
   const nameResult = emailAsName.harness.call(
     'submitAttendance',
     'session-token', ROLL_NUMBER, OFFICIAL_EMAIL, OFFICIAL_EMAIL,
-    true, DEVICE_ID, 'test-agent', emailAsName.grant
+    'Male', true, DEVICE_ID, 'test-agent', emailAsName.grant
   );
   assert.equal(nameResult.success, false);
   assert.match(nameResult.error, /valid full name/i);
@@ -524,7 +627,7 @@ test('blocks duplicate roll and second roll from the same device', () => {
   const duplicate = createSubmitHarness({ existingCheckin: { timestamp: new Date() } });
   const duplicateResult = duplicate.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, '', '', false, DEVICE_ID, 'test-agent', duplicate.grant
+    'session-token', ROLL_NUMBER, '', '', '', false, DEVICE_ID, 'test-agent', duplicate.grant
   );
   assert.equal(duplicateResult.duplicate, true);
   assert.equal(duplicateResult.sameDevice, false);
@@ -537,7 +640,7 @@ test('blocks duplicate roll and second roll from the same device', () => {
   });
   const sameDeviceResult = sameDeviceDuplicate.harness.call(
     'submitAttendance',
-    'session-token', ROLL_NUMBER, '', '', false, DEVICE_ID, 'test-agent', sameDeviceDuplicate.grant
+    'session-token', ROLL_NUMBER, '', '', '', false, DEVICE_ID, 'test-agent', sameDeviceDuplicate.grant
   );
   assert.equal(sameDeviceResult.duplicate, true);
   assert.equal(sameDeviceResult.sameDevice, true);
@@ -545,7 +648,7 @@ test('blocks duplicate roll and second roll from the same device', () => {
   const device = createSubmitHarness({ deviceCheckin: { timestamp: new Date(), rollNumber: ROLL_NUMBER } });
   const deviceResult = device.harness.call(
     'submitAttendance',
-    'session-token', 'CB.SC.U4CYS25049', '', '', false, DEVICE_ID, 'test-agent', device.grant
+    'session-token', 'CB.SC.U4CYS25049', '', '', '', false, DEVICE_ID, 'test-agent', device.grant
   );
   assert.equal(deviceResult.deviceBlocked, true);
   assert.equal(device.checkins.length, 0);

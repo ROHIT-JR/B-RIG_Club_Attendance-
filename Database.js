@@ -82,6 +82,9 @@ const DB = {
           officialEmail: headers.indexOf('Official Email') === -1
             ? ''
             : data[i][headers.indexOf('Official Email')],
+          gender: headers.indexOf(CONFIG.GENDER.HEADER) === -1
+            ? ''
+            : data[i][headers.indexOf(CONFIG.GENDER.HEADER)],
           status: data[i][headers.indexOf('Status')],
           row: i + 1
         };
@@ -163,8 +166,7 @@ const DB = {
   },
 
   /**
-   * Ensures registration uses the standard identity columns and a dedicated
-   * Official Email column, even before workbook setup is rerun after upgrade.
+   * Validates the Students schema without mutating production data.
    * @returns {Array<string>} Current Students headers.
    */
   ensureStudentSchema: function() {
@@ -173,20 +175,117 @@ const DB = {
     if (!sheet) throw new Error('Students sheet is missing. Run workbook setup first.');
 
     const lastColumn = sheet.getLastColumn();
-    const headers = lastColumn > 0
-      ? sheet.getRange(1, 1, 1, lastColumn).getValues()[0]
-      : [];
-    const coreHeaders = CONFIG.STUDENT_HEADERS.slice(0, -1);
+    const headerRange = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn) : null;
+    const headers = headerRange ? headerRange.getValues()[0] : [];
+    const coreHeaders = CONFIG.STUDENT_BASE_HEADERS.slice(0, 7);
     const coreIsValid = coreHeaders.every((header, index) => headers[index] === header);
     if (!coreIsValid) {
       throw new Error('Students sheet columns were renamed or reordered. Restore the headers before accepting attendance.');
     }
 
-    if (!headers.includes('Official Email')) {
-      sheet.getRange(1, headers.length + 1).setValue('Official Email').setFontWeight('bold');
-      headers.push('Official Email');
+    const normalizedHeaders = headers.map(normalizeStudentHeader_);
+    for (const requiredHeader of ['Official Email', CONFIG.GENDER.HEADER]) {
+      const normalizedRequired = normalizeStudentHeader_(requiredHeader);
+      const matches = normalizedHeaders
+        .map((header, index) => header === normalizedRequired ? index : -1)
+        .filter(index => index !== -1);
+      if (matches.length !== 1 || headers[matches[0]] !== requiredHeader) {
+        throw new Error(`Students sheet requires one canonical ${requiredHeader} column. Run the Gender schema migration.`);
+      }
     }
     return headers;
+  },
+
+  inspectStudentGenderSchema: function(spreadsheet) {
+    const ss = spreadsheet || getAttendanceSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.STUDENTS);
+    if (!sheet) return { status: 'blocked', canApply: false, errors: ['Students sheet is missing.'] };
+
+    const lastRow = sheet.getLastRow();
+    const lastColumn = sheet.getLastColumn();
+    const headerRange = lastColumn > 0 ? sheet.getRange(1, 1, 1, lastColumn) : null;
+    const headers = headerRange ? headerRange.getValues()[0] : [];
+    const headerFormulas = headerRange && typeof headerRange.getFormulas === 'function'
+      ? headerRange.getFormulas()[0]
+      : Array(lastColumn).fill('');
+    const normalizedHeaders = headers.map(normalizeStudentHeader_);
+    const errors = [];
+    const duplicateHeaders = [];
+    const headerCounts = new Map();
+    normalizedHeaders.forEach(header => {
+      if (!header) return;
+      headerCounts.set(header, (headerCounts.get(header) || 0) + 1);
+    });
+    headerCounts.forEach((count, header) => {
+      if (count > 1) duplicateHeaders.push(header);
+    });
+    if (duplicateHeaders.length) errors.push('Normalized duplicate headers exist.');
+    if (normalizedHeaders.some(header => !header)) errors.push('Blank header cells exist in the used header range.');
+    if (headerFormulas.some(formula => formula)) errors.push('Formula cells exist in the Students header row.');
+
+    const baseIsValid = CONFIG.STUDENT_BASE_HEADERS.slice(0, 7)
+      .every((header, index) => headers[index] === header);
+    if (!baseIsValid) errors.push('Core Students headers were renamed or reordered.');
+    const officialColumns = normalizedHeaders
+      .map((header, index) => header === normalizeStudentHeader_('Official Email') ? index + 1 : 0)
+      .filter(Boolean);
+    if (officialColumns.length !== 1 || headers[officialColumns[0] - 1] !== 'Official Email') {
+      errors.push('Exactly one canonical Official Email header is required.');
+    }
+
+    const genderColumns = normalizedHeaders
+      .map((header, index) => header === normalizeStudentHeader_(CONFIG.GENDER.HEADER) ? index + 1 : 0)
+      .filter(Boolean);
+    if (genderColumns.length > 1) errors.push('Multiple Gender headers were found.');
+    if (genderColumns.length === 1 && headers[genderColumns[0] - 1] !== CONFIG.GENDER.HEADER) {
+      errors.push('The Gender header is not canonical.');
+    }
+
+    let rowsWithGender = 0;
+    let rowsWithoutGender = 0;
+    let unexpectedGenderValues = 0;
+    let duplicateKeys = 0;
+    if (lastRow > 1) {
+      const data = sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues();
+      const rollIndex = headers.indexOf('Roll Number');
+      const seenKeys = new Set();
+      const genderIndex = genderColumns.length === 1 ? genderColumns[0] - 1 : -1;
+      data.forEach(row => {
+        const key = rollIndex === -1 ? '' : normalizeRollNo(row[rollIndex]);
+        if (key && seenKeys.has(key)) duplicateKeys += 1;
+        if (key) seenKeys.add(key);
+        if (genderIndex === -1 || String(row[genderIndex] || '').trim() === '') {
+          rowsWithoutGender += 1;
+        } else if (normalizeGender(row[genderIndex]) === String(row[genderIndex])) {
+          rowsWithGender += 1;
+        } else {
+          unexpectedGenderValues += 1;
+        }
+      });
+    }
+
+    if (duplicateKeys) errors.push('Duplicate normalized student keys were found.');
+    if (unexpectedGenderValues) errors.push('Unexpected existing Gender values were found.');
+    const status = errors.length
+      ? 'blocked'
+      : genderColumns.length === 1 ? 'already_applied' : 'ready';
+    return {
+      status,
+      canApply: status === 'ready',
+      spreadsheetId: ss.getId(),
+      sheetId: sheet.getSheetId(),
+      lastRow,
+      lastColumn,
+      proposedGenderColumn: status === 'ready' ? lastColumn + 1 : genderColumns[0] || null,
+      rowsWithGender,
+      rowsWithoutGender,
+      unexpectedGenderValues,
+      duplicateKeys,
+      duplicateHeaderCount: duplicateHeaders.length,
+      errors,
+      headersDigest: stableSheetDigest_([headers], [[]]),
+      legacyDigest: snapshotStudentRange_(sheet, lastColumn)
+    };
   },
 
   /**
@@ -246,3 +345,33 @@ const DB = {
     return null;
   }
 };
+
+function normalizeStudentHeader_(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function stableSheetDigest_(values, formulas) {
+  const normalizeValue = value => Object.prototype.toString.call(value) === '[object Date]'
+    ? { date: value.toISOString() }
+    : value;
+  const canonicalCells = values.map((row, rowIndex) => row.map((value, columnIndex) => {
+    const formula = formulas[rowIndex]?.[columnIndex] || '';
+    return formula ? { formula } : { value: normalizeValue(value) };
+  }));
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(canonicalCells),
+    Utilities.Charset.UTF_8
+  );
+  return digest.map(byte => (byte + 256).toString(16).slice(-2)).join('');
+}
+
+function snapshotStudentRange_(sheet, columnCount) {
+  const rowCount = sheet.getLastRow();
+  if (rowCount === 0 || columnCount === 0) return stableSheetDigest_([], []);
+  const range = sheet.getRange(1, 1, rowCount, columnCount);
+  const formulas = typeof range.getFormulas === 'function'
+    ? range.getFormulas()
+    : Array.from({ length: rowCount }, () => Array(columnCount).fill(''));
+  return stableSheetDigest_(range.getValues(), formulas);
+}

@@ -139,6 +139,41 @@ test('requires an official email for first-time registration', async () => {
   assert.deepEqual(JSON.parse(res.body), { error: 'Invalid request payload.' });
 });
 
+test('allows only Male or Female and requires Gender for first-time registration', async () => {
+  let fetchCount = 0;
+  const handler = createHandler({
+    env: VALID_ENV,
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return jsonResponse({ success: true });
+    }
+  });
+  const base = {
+    action: 'submitAttendance',
+    sessionToken: 'session-token',
+    rollNumber: 'CB.SC.U4CYS25048',
+    fullName: 'Test Student',
+    officialEmail: 'cb.sc.u4cys25048@cb.students.amrita.edu',
+    isNewRegistration: true,
+    deviceId: '123e4567-e89b-42d3-a456-426614174000',
+    accessGrant: 'short-lived-grant'
+  };
+
+  for (const gender of [undefined, '', 'Prefer not to say', 'Other', 'male']) {
+    const body = { ...base };
+    if (gender !== undefined) body.gender = gender;
+    const res = await invoke(handler, createRequest(body));
+    assert.equal(res.statusCode, 400);
+  }
+  assert.equal(fetchCount, 0);
+
+  for (const gender of ['Male', 'Female']) {
+    const res = await invoke(handler, createRequest({ ...base, gender }));
+    assert.equal(res.statusCode, 200);
+  }
+  assert.equal(fetchCount, 2);
+});
+
 test('rejects oversized content-length and parsed bodies', async t => {
   const handler = createHandler({ env: VALID_ENV, fetchImpl: async () => jsonResponse({}) });
 

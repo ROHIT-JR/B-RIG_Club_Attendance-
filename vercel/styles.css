@@ -341,7 +341,8 @@ label {
 }
 
 input[type='text'],
-input[type='email'] {
+input[type='email'],
+select {
   width: 100%;
   min-width: 0;
   min-height: 54px;
@@ -363,7 +364,8 @@ input[type='email']::placeholder {
 }
 
 input[type='text']:focus,
-input[type='email']:focus {
+input[type='email']:focus,
+select:focus {
   border-color: var(--primary);
   background: rgba(8, 25, 23, 0.78);
   box-shadow: 0 0 0 4px rgba(70, 199, 181, 0.11);
@@ -415,7 +417,8 @@ button {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 3px solid #70ddcd;
   outline-offset: 3px;
 }
