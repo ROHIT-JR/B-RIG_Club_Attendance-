@@ -11,6 +11,7 @@ function onOpen() {
     .addItem('Show Current QR Code', 'showCurrentSessionQR')
     .addItem('Create New Attendance Session', 'createNewSession')
     .addItem('Close Current Session', 'closeCurrentSession')
+    .addItem('Shuffle', 'shuffleStudentsIntoGroups')
     .addSeparator()
     .addItem('Reset / Clear All Sessions', 'clearAllData')
     .addSeparator()
