@@ -596,7 +596,7 @@ function validateRollNo(rollNumber, sessionToken, deviceId, accessGrant) {
   if (!isValidRollNo(normalizedRollNo)) {
     return {
       valid: false,
-      error: `Use the format ${CONFIG.ROLL_NUMBER.EXAMPLE}: department (3 letters), joining year (2 digits), and roll number (3 digits).`
+      error: 'Enter a valid CB university roll number using letters, numbers, and periods only.'
     };
   }
 
@@ -624,7 +624,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, isN
 
   const normalizedRollNo = normalizeRollNo(rollNumber);
   if (!isValidRollNo(normalizedRollNo)) {
-    return { success: false, error: `Invalid roll number. Use ${CONFIG.ROLL_NUMBER.EXAMPLE}.` };
+    return { success: false, error: 'Enter a valid CB university roll number using letters, numbers, and periods only.' };
   }
   if (!deviceId || !CONFIG.DEVICE_ID_PATTERN.test(String(deviceId))) {
     return { success: false, error: 'This browser could not be verified. Enable browser storage and try again.' };

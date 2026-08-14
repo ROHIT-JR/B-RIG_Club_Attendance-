@@ -17,10 +17,15 @@ function createHarness(overrides = {}) {
         SESSIONS: 'Sessions',
         DASHBOARD: 'Attendance Dashboard'
       },
-      MARKERS: { PRESENT: 'P' }
+      MARKERS: { PRESENT: 'P', ABSENT: 'A' },
+      STATUS: { STUDENT: { ACTIVE: 'Active' } }
     },
     SpreadsheetApp: overrides.SpreadsheetApp || {},
-    LockService: overrides.LockService || {},
+    HtmlService: overrides.HtmlService || {},
+    LockService: overrides.LockService || {
+      getScriptLock: () => ({ waitLock() {}, releaseLock() {} }),
+      getDocumentLock: () => ({ waitLock() {}, releaseLock() {} })
+    },
     Utilities: overrides.Utilities || {
       formatDate(date, timeZone, format) {
         if (format === 'yyyy-MM-dd') return date.toISOString().slice(0, 10);
@@ -109,6 +114,90 @@ test('only latest-session P rows are eligible and present new members are includ
   ]);
 });
 
+test('absent selector offers only unique Active students who are not present', () => {
+  const studentRows = [
+    ['Roll Number', 'Full Name', 'Status', 'Registered At'],
+    ['CB.SC.U4CYS25001', 'Present Student', 'Active', new Date('2026-08-01T00:00:00Z')],
+    ['CB.EN.U4EEE25002', 'Selected Absent', 'active', new Date('2026-08-14T09:00:00Z')],
+    [' cb.en.u4eee25002 ', 'Duplicate Absent', 'Active', new Date('2026-08-14T09:00:00Z')],
+    ['CB.SC.U4ECE25003', 'Pending Student', 'Pending', new Date('2026-08-14T09:00:00Z')],
+    ['CB.SC.U4MEC25004', 'Inactive Student', 'Inactive', new Date('2026-08-01T00:00:00Z')],
+    ['CB.SC.U4CSE25005', '', 'Active', new Date('2026-08-01T00:00:00Z')],
+    ['CB.SC.U4CSE25006', 'Pre-registration Student', 'Active', new Date('2026-08-15T00:00:00Z')]
+  ];
+  const dashboardRows = [
+    ['S.No', 'Name', 'Roll No', '14-08-2026'],
+    [1, 'Present Student', 'CB.SC.U4CYS25001', 'P'],
+    [2, 'Selected Absent', 'CB.EN.U4EEE25002', 'A'],
+    [3, 'Pending Student', 'CB.SC.U4ECE25003', 'A'],
+    [4, 'Inactive Student', 'CB.SC.U4MEC25004', 'A'],
+    [5, '', 'CB.SC.U4CSE25005', 'A'],
+    [6, 'Pre-registration Student', 'CB.SC.U4CSE25006', '—']
+  ];
+  const dashboard = {
+    getDataRange: () => ({ getValues: () => dashboardRows }),
+    getRange: () => ({ getNotes: () => [['', '', '', 'SES-1']] })
+  };
+  const spreadsheet = {
+    getSheetByName(name) {
+      if (name === 'Students') return { getDataRange: () => ({ getValues: () => studentRows }) };
+      if (name === 'Attendance Dashboard') return dashboard;
+      return null;
+    }
+  };
+  const harness = createHarness({ spreadsheet });
+  const present = [{ rollNumber: 'CB.SC.U4CYS25001' }];
+  const session = { sessionId: 'SES-1', date: new Date('2026-08-14T00:00:00Z') };
+  const absent = plain(harness.call(
+    'getEligibleAbsentShuffleStudents_', spreadsheet, present, session, 'UTC'
+  ));
+  assert.deepEqual(absent, [{
+    rollNumber: 'CB.EN.U4EEE25002',
+    fullName: 'Selected Absent',
+    department: 'EEE',
+    isNewMember: true,
+    participationSource: 'Admin Added (Absent)'
+  }]);
+});
+
+test('server selection includes only explicitly selected eligible absent rolls', () => {
+  const harness = createHarness();
+  const present = [{
+    rollNumber: 'CB.SC.U4CYS25001', fullName: 'Present', department: 'CYS',
+    isNewMember: false, participationSource: 'Present'
+  }];
+  const absent = [
+    { rollNumber: 'CB.EN.U4EEE25002', fullName: 'Chosen', department: 'EEE', isNewMember: true, participationSource: 'Admin Added (Absent)' },
+    { rollNumber: 'CB.SC.U4ECE25003', fullName: 'Not Chosen', department: 'ECE', isNewMember: false, participationSource: 'Admin Added (Absent)' }
+  ];
+  const participants = plain(harness.call(
+    'buildFinalShuffleParticipants_', present, absent,
+    ['cb.en.u4eee25002', 'CB.EN.U4EEE25002', 'CB.UNKNOWN25004']
+  ));
+  assert.deepEqual(participants.map(student => student.rollNumber), [
+    'CB.SC.U4CYS25001', 'CB.EN.U4EEE25002'
+  ]);
+  assert.equal(participants[1].isNewMember, true);
+  assert.equal(participants[1].participationSource, 'Admin Added (Absent)');
+});
+
+test('student who becomes present before modal submission appears only once', () => {
+  const harness = createHarness();
+  const nowPresent = {
+    rollNumber: 'CB.EN.U4EEE25002', fullName: 'Now Present', department: 'EEE',
+    isNewMember: true, participationSource: 'Present'
+  };
+  const staleAbsentChoice = {
+    ...nowPresent,
+    participationSource: 'Admin Added (Absent)'
+  };
+  const participants = harness.call(
+    'buildFinalShuffleParticipants_', [nowPresent], [staleAbsentChoice], ['CB.EN.U4EEE25002']
+  );
+  assert.equal(participants.length, 1);
+  assert.equal(participants[0].participationSource, 'Present');
+});
+
 test('latest session is the final session row and never falls back to an older row', () => {
   const sessionRows = [
     ['Session ID', 'Session Date', 'Session Title'],
@@ -167,6 +256,7 @@ test('new-member date comparison honors the configured time zone', () => {
 test('department extraction uses the final three programme letters and falls back to UNK', () => {
   const harness = createHarness();
   assert.equal(harness.call('extractDepartmentFromRoll_', 'CB.SC.U4CYS25048'), 'CYS');
+  assert.equal(harness.call('extractDepartmentFromRoll_', 'CB.EN.CAMPUS.U4EEE25001'), 'EEE');
   assert.equal(harness.call('extractDepartmentFromRoll_', 'cb.en.pgdata25abc'), 'UNK');
   assert.equal(harness.call('extractDepartmentFromRoll_', 'CB.EN.U4ECE25001'), 'ECE');
   assert.equal(harness.call('extractDepartmentFromRoll_', 'CB.SC.MTECH25001'), 'ECH');
@@ -203,7 +293,7 @@ test('preferred group strength prompt validates the administrator input', () => 
     ButtonSet: { OK_CANCEL: 'OK_CANCEL' },
     prompt: (title, message) => {
       assert.equal(title, 'Shuffle Students');
-      assert.equal(message, 'Enter the preferred number of students per group:');
+      assert.equal(message, 'Enter the preferred number of members per group:');
       return { getSelectedButton: () => 'OK', getResponseText: () => value };
     },
     alert: message => alerts.push(message)
@@ -215,6 +305,93 @@ test('preferred group strength prompt validates the administrator input', () => 
   cancelUi.prompt = () => ({ getSelectedButton: () => 'CANCEL', getResponseText: () => '5' });
   assert.equal(harness.call('promptForPreferredGroupSize_', 20, cancelUi), null);
   assert.equal(alerts.length, 2);
+});
+
+test('absent selector modal receives safe display data and preferred size', () => {
+  let templateName = '';
+  let shownTitle = '';
+  let evaluated = false;
+  const output = {
+    setWidth() { return this; },
+    setHeight() { return this; }
+  };
+  const template = {
+    selectorDataJson: '',
+    evaluate() { evaluated = true; return output; }
+  };
+  const harness = createHarness({
+    HtmlService: {
+      createTemplateFromFile(name) { templateName = name; return template; }
+    },
+    SpreadsheetApp: {
+      getUi: () => ({ showModalDialog(html, title) { assert.equal(html, output); shownTitle = title; } })
+    }
+  });
+  harness.call(
+    'showShuffleAbsentSelector_',
+    [{ rollNumber: 'CB.SC.U4CYS25001' }],
+    [{ rollNumber: 'CB.EN.U4EEE25002', fullName: '<Student>', department: 'EEE', isNewMember: true }],
+    { sessionId: 'SES-1', title: 'Latest', date: new Date('2026-08-14T00:00:00Z') },
+    5,
+    'UTC'
+  );
+  assert.equal(templateName, 'ShuffleAbsentSelector');
+  assert.equal(shownTitle, 'Add absent students (optional)');
+  assert.equal(evaluated, true);
+  assert.match(template.selectorDataJson, /\\u003cStudent>/);
+  assert.match(template.selectorDataJson, /"sessionId":"SES-1"/);
+  assert.match(template.selectorDataJson, /"preferredGroupSize":5/);
+});
+
+test('zero present students can continue to the selector when an Active absent student exists', () => {
+  let modalShown = false;
+  const spreadsheet = {
+    getSheetByName(name) {
+      if (name === 'Sessions') return { getDataRange: () => ({ getValues: () => [
+        ['Session ID', 'Session Date', 'Session Title'],
+        ['SES-1', new Date('2026-08-14T00:00:00Z'), 'Latest']
+      ] }) };
+      if (name === 'Attendance Dashboard') return {
+        getDataRange: () => ({ getValues: () => [
+          ['S.No', 'Name', 'Roll No', '14-08-2026'],
+          [1, 'Absent Student', 'CB.EN.U4EEE25001', 'A']
+        ] }),
+        getRange: () => ({ getNotes: () => [['', '', '', 'SES-1']] })
+      };
+      if (name === 'Students') return { getDataRange: () => ({ getValues: () => [
+        ['Roll Number', 'Full Name', 'Status', 'Registered At'],
+        ['CB.EN.U4EEE25001', 'Absent Student', 'Active', new Date('2026-08-01T00:00:00Z')]
+      ] }) };
+      return null;
+    }
+  };
+  const output = { setWidth() { return this; }, setHeight() { return this; } };
+  const ui = {
+    Button: { OK: 'OK' },
+    ButtonSet: { OK_CANCEL: 'OK_CANCEL' },
+    prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '1' }),
+    showModalDialog() { modalShown = true; },
+    alert() {}
+  };
+  const harness = createHarness({
+    spreadsheet,
+    SpreadsheetApp: { getUi: () => ui },
+    HtmlService: { createTemplateFromFile: () => ({ evaluate: () => output }) }
+  });
+  harness.call('shuffleStudentsIntoGroups');
+  assert.equal(modalShown, true);
+});
+
+test('admin selector is Sheets-only, defaults to no selection, and calls server revalidation', () => {
+  const html = fs.readFileSync('ShuffleAbsentSelector.html', 'utf8');
+  assert.match(html, /Add absent students \(optional\)/);
+  assert.match(html, /type="search"/);
+  assert.match(html, /const selected = new Set\(\)/);
+  assert.match(html, /Generate Teams/);
+  assert.match(html, /google\.script\.run/);
+  assert.match(html, /finalizeShuffleWithAbsent\(data\.preferredGroupSize, \[\.\.\.selected\], data\.sessionId\)/);
+  assert.match(html, /google\.script\.host\.close\(\)/);
+  assert.doesNotMatch(html, /<input[^>]+\schecked(?:=|\s|>)/i);
 });
 
 test('every student is assigned exactly once with balanced group sizes', () => {
@@ -356,6 +533,8 @@ test('rewriting Shuffle breaks existing merged ranges before clearing', () => {
   assert.ok(writtenRows.some(row => row[0] === 'New Members' && row[1] === 1));
   assert.ok(writtenRows.some(row => row[4] === 'Member'));
   assert.ok(writtenRows.some(row => row[4] === 'New'));
+  assert.ok(writtenRows.some(row => row[5] === 'Participation Source'));
+  assert.ok(writtenRows.some(row => row[5] === 'Present'));
 });
 
 test('failed history write restores exact existing Shuffle and history sheets', () => {
@@ -506,6 +685,27 @@ test('partial backup creation failure leaves original feature sheets untouched',
   assert.match(deleted[0], /Shuffle Backup/);
 });
 
+test('backup naming failure removes the copied sheet', () => {
+  const harness = createHarness();
+  const deleted = [];
+  const copy = {
+    setName() { throw new Error('naming failed'); }
+  };
+  const shuffle = {
+    isSheetHidden: () => false,
+    copyTo: () => copy
+  };
+  const spreadsheet = {
+    getSheetByName: name => name === 'Shuffle' ? shuffle : null,
+    deleteSheet(sheet) { deleted.push(sheet); }
+  };
+
+  assert.throws(() => harness.call(
+    'writeShuffleResultsSafely_', spreadsheet, [], [], '2026-08-10', new Date(), 'UTC', 0, {}
+  ), /naming failed/);
+  assert.deepEqual(deleted, [copy]);
+});
+
 test('week key uses Monday and current-week history is excluded from pair penalties', () => {
   const harness = createHarness();
   assert.equal(harness.call('getWeekKey_', new Date('2026-08-13T12:00:00Z'), 'UTC'), '2026-08-10');
@@ -572,8 +772,8 @@ test('no latest session, no P students, invalid preference, and classification f
             getDataRange: () => {
               if (scenario === 'classification') throw new Error('classification failed');
               return { getValues: () => [
-                ['Roll Number', 'Registered At'],
-                ['CB.SC.U4CYS25001', new Date('2026-08-01T00:00:00Z')]
+                ['Roll Number', 'Full Name', 'Status', 'Registered At'],
+                ['CB.SC.U4CYS25001', 'Student', scenario === 'no-present' ? 'Inactive' : 'Active', new Date('2026-08-01T00:00:00Z')]
               ] };
             }
           };
@@ -603,6 +803,39 @@ test('no latest session, no P students, invalid preference, and classification f
   }
 });
 
+test('stale modal session is rejected under the shared script lock without output mutation', () => {
+  const events = [];
+  let outputMutations = 0;
+  const spreadsheet = {
+    getSheetByName(name) {
+      events.push(`read:${name}`);
+      if (name === 'Sessions') return { getDataRange: () => ({ getValues: () => [
+        ['Session ID', 'Session Date', 'Session Title'],
+        ['SES-NEW', new Date('2026-08-14T00:00:00Z'), 'New session']
+      ] }) };
+      return null;
+    },
+    insertSheet() { outputMutations += 1; },
+    deleteSheet() { outputMutations += 1; },
+    toast() { outputMutations += 1; }
+  };
+  const harness = createHarness({
+    spreadsheet,
+    LockService: {
+      getScriptLock: () => ({
+        waitLock() { events.push('lock'); },
+        releaseLock() { events.push('unlock'); }
+      })
+    }
+  });
+  assert.throws(
+    () => harness.call('finalizeShuffleWithAbsent', 5, [], 'SES-OLD'),
+    /newer attendance session/i
+  );
+  assert.deepEqual(events, ['lock', 'read:Sessions', 'unlock']);
+  assert.equal(outputMutations, 0);
+});
+
 test('candidate generation failure preserves Shuffle History', () => {
   let outputMutations = 0;
   const spreadsheet = {
@@ -619,7 +852,8 @@ test('candidate generation failure preserves Shuffle History', () => {
         getRange: () => ({ getNotes: () => [['', '', '', 'SES-1']] })
       };
       if (name === 'Students') return { getDataRange: () => ({ getValues: () => [
-        ['Roll Number', 'Registered At'], ['CB.SC.U4CYS25001', new Date('2026-08-01T00:00:00Z')]
+        ['Roll Number', 'Full Name', 'Status', 'Registered At'],
+        ['CB.SC.U4CYS25001', 'Student', 'Active', new Date('2026-08-01T00:00:00Z')]
       ] }) };
       if (name === 'Shuffle History') return null;
       return null;
@@ -628,26 +862,22 @@ test('candidate generation failure preserves Shuffle History', () => {
     deleteSheet() { outputMutations += 1; },
     toast() { outputMutations += 1; }
   };
-  const ui = {
-    Button: { OK: 'OK' },
-    ButtonSet: { OK_CANCEL: 'OK_CANCEL' },
-    prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '1' }),
-    alert() {}
-  };
-  const harness = createHarness({ spreadsheet, SpreadsheetApp: { getUi: () => ui } });
+  const harness = createHarness({ spreadsheet });
   harness.context.buildInterdisciplinaryGroups_ = () => { throw new Error('candidate failed'); };
-  harness.call('shuffleStudentsIntoGroups');
+  assert.throws(() => harness.call('finalizeShuffleWithAbsent', 1, [], 'SES-1'), /candidate failed/);
   assert.equal(outputMutations, 0);
 });
 
-test('add-only boundary leaves protected attendance and Vercel files byte-identical to main', () => {
+test('manual absent selection has no attendance mutation path', () => {
+  assert.doesNotMatch(shuffleSource, /CONFIG\.SHEETS\.CHECKINS|appendRow\(|\.setValue\(/);
+  assert.doesNotMatch(shuffleSource, /submitAttendance|validateRollNo|DB\.withLock/);
+});
+
+test('protected database, QR, and Vercel API files remain byte-identical', () => {
   const expectedHashes = {
-    'Config.js': '23bb1a55678caeef66e7d39f9b58e0752ef75a67ca1641591a4af8a3074d0932',
     'Database.js': '5fdb44a58666e9f2b26adf519842dcf104eb2333c7bc35152346133235ef38de',
     'AdminSidebar.html': '601d56dc2985cefd173545ca047f6526d53fd15e54a6efcbab03c626ea21788e',
     'appsscript.json': '7ac9773a041fa8c532a9102a881594471de56af49720e3cbfb619a7272dbc793',
-    'vercel/index.html': 'f0b0ed4c45c1ed75af0742faf13f4baa288696e9e6f8a4d2a119c314259e1205',
-    'vercel/app.js': 'eeb6a5d75c7246c634181c99e6a9ca04bd53b7422d8fd2531b6741de2bdb786e',
     'vercel/styles.css': '668f93d98afd21292340c16b2d3ff676288f9bc6d27a398b1d79f29c00b87b01',
     'vercel/api/attendance.js': '0d41015718fe233a8bf3cd1c2a6dd42fc64b5071d7bfdaf7afef4086e6410c2d',
     'vercel/vercel.json': 'f036dcc45aacfa11311008f5c3c36e51b2b2928f680d69602e2b8dff5b930b82',

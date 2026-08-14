@@ -3,8 +3,10 @@
  */
 const CONFIG = {
   ROLL_NUMBER: {
-    PATTERN: /^CB\.SC\.U4([A-Z]{3})(\d{2})(\d{3})$/,
-    EXAMPLE: 'CB.SC.U4CYS25048'
+    MIN_LENGTH: 8,
+    MAX_LENGTH: 32,
+    PATTERN: /^CB\.[A-Z0-9.]+$/,
+    EXAMPLE: 'CB.EN.U4EEE25048'
   },
   OFFICIAL_EMAIL_DOMAIN: 'cb.students.amrita.edu',
   ACCESS_CONTROL: {
@@ -66,13 +68,17 @@ function normalizeRollNo(rollNo) {
 }
 
 /**
- * Checks the institutional roll-number structure.
- * Format: CB.SC.U4 + department (3 letters) + joining year (2 digits) + roll (3 digits).
+ * Checks a safe generalized Coimbatore-campus roll-number syntax.
  * @param {string} rollNo
  * @returns {boolean}
  */
 function isValidRollNo(rollNo) {
-  return CONFIG.ROLL_NUMBER.PATTERN.test(normalizeRollNo(rollNo));
+  const normalized = normalizeRollNo(rollNo);
+  return normalized.length >= CONFIG.ROLL_NUMBER.MIN_LENGTH &&
+    normalized.length <= CONFIG.ROLL_NUMBER.MAX_LENGTH &&
+    CONFIG.ROLL_NUMBER.PATTERN.test(normalized) &&
+    !normalized.includes('..') &&
+    !normalized.endsWith('.');
 }
 
 /**
