@@ -11,7 +11,14 @@ const shuffleSource = fs.readFileSync('Shuffle.js', 'utf8');
 function createHarness(overrides = {}) {
   const context = vm.createContext({
     console: { error() {} },
-    CONFIG: { SHEETS: { STUDENTS: 'Students' } },
+    CONFIG: {
+      SHEETS: {
+        STUDENTS: 'Students',
+        SESSIONS: 'Sessions',
+        DASHBOARD: 'Attendance Dashboard'
+      },
+      MARKERS: { PRESENT: 'P' }
+    },
     SpreadsheetApp: overrides.SpreadsheetApp || {},
     LockService: overrides.LockService || {},
     Utilities: overrides.Utilities || {
@@ -45,11 +52,12 @@ function deterministicRandom(seed = 123456789) {
   };
 }
 
-function makeStudents(departments) {
+function makeStudents(departments, newMemberCount = 0) {
   return departments.map((department, index) => ({
     rollNumber: `CB.SC.U4${department}25${String(index + 1).padStart(3, '0')}`,
     fullName: `Student ${index + 1}`,
-    department
+    department,
+    isNewMember: index < newMemberCount
   }));
 }
 
@@ -62,47 +70,98 @@ test('menu adds only the Shuffle command', () => {
   assert.match(code, /\.addItem\('Shuffle', 'shuffleStudentsIntoGroups'\)/);
 });
 
-test('eligible students are active, complete, and deduplicated by normalized roll', () => {
-  const rows = [
-    ['Student ID', 'Roll Number', 'Full Name', 'Status'],
-    ['1', ' cb.sc.u4cys25048 ', 'Active Student', 'active'],
-    ['2', 'CB.SC.U4CYS25048', 'Duplicate Student', 'Active'],
-    ['3', 'CB.SC.U4ECE25049', 'Pending Student', 'Pending'],
-    ['4', 'CB.SC.U4EEE25050', 'Inactive Student', 'Inactive'],
-    ['5', '', 'Missing Roll', 'Active'],
-    ['6', 'CB.SC.U4MEC25051', '', 'Active'],
-    ['', '', '', '']
+test('only latest-session P rows are eligible and present new members are included', () => {
+  const dashboardRows = [
+    ['S.No', 'Name', 'Roll No', '07-08-2026', '14-08-2026'],
+    [1, 'Arun', 'CB.SC.U4CYS25001', 'P', 'P'],
+    [2, 'Bala', 'CB.SC.U4ECE25002', 'P', 'A'],
+    [3, 'Chris', 'CB.SC.U4EEE25003', 'A', 'P'],
+    [4, 'Diya', 'CB.SC.U4MEC25004', 'P', 'P'],
+    [5, 'Eshan', 'CB.SC.U4CSE25005', 'P', ''],
+    [6, 'Duplicate', ' cb.sc.u4cys25001 ', 'A', 'P'],
+    [7, 'Whitespace Mark', 'CB.SC.U4CYS25007', 'A', ' p ']
   ];
+  const studentRows = [
+    ['Roll Number', 'Registered At'],
+    ['CB.SC.U4CYS25001', new Date('2026-08-01T08:00:00Z')],
+    ['CB.SC.U4ECE25002', new Date('2026-08-01T08:00:00Z')],
+    ['CB.SC.U4EEE25003', new Date('invalid')],
+    ['CB.SC.U4MEC25004', new Date('2026-08-14T09:14:00Z')]
+  ];
+  const dashboard = {
+    getDataRange: () => ({ getValues: () => dashboardRows }),
+    getRange: () => ({ getNotes: () => [['', '', '', 'SES-OLD', 'SES-LATEST']] })
+  };
   const spreadsheet = {
-    getSheetByName: name => name === 'Students'
-      ? { getDataRange: () => ({ getValues: () => rows }) }
-      : null
+    getSheetByName(name) {
+      if (name === 'Attendance Dashboard') return dashboard;
+      if (name === 'Students') return { getDataRange: () => ({ getValues: () => studentRows }) };
+      return null;
+    }
   };
   const harness = createHarness({ spreadsheet });
-  const students = plain(harness.call('getEligibleShuffleStudents_', spreadsheet));
-  assert.deepEqual(students, [{
-    rollNumber: 'CB.SC.U4CYS25048',
-    fullName: 'Active Student',
-    department: 'CYS'
-  }]);
+  const session = { sessionId: 'SES-LATEST', date: new Date('2026-08-14T00:00:00Z') };
+  const students = plain(harness.call('getEligibleShuffleStudents_', spreadsheet, session, 'UTC'));
+  assert.deepEqual(students.map(student => [student.fullName, student.isNewMember]), [
+    ['Arun', false],
+    ['Chris', false],
+    ['Diya', true]
+  ]);
 });
 
-test('missing Status includes complete rows while missing required headers fails', () => {
-  const withoutStatus = {
-    getSheetByName: () => ({
-      getDataRange: () => ({ getValues: () => [
-        ['Roll Number', 'Full Name'],
-        ['CB.SC.U4ECE25001', 'Student']
-      ] })
-    })
+test('latest session is the final session row and never falls back to an older row', () => {
+  const sessionRows = [
+    ['Session ID', 'Session Date', 'Session Title'],
+    ['SES-OLD', new Date('2026-08-07T00:00:00Z'), 'Old'],
+    ['SES-LATEST', new Date('2026-08-14T00:00:00Z'), 'Latest']
+  ];
+  const spreadsheet = {
+    getSheetByName: () => ({ getDataRange: () => ({ getValues: () => sessionRows }) })
   };
-  const harness = createHarness({ spreadsheet: withoutStatus });
-  assert.equal(harness.call('getEligibleShuffleStudents_', withoutStatus).length, 1);
+  const harness = createHarness({ spreadsheet });
+  assert.equal(harness.call('getLatestAttendanceSession_', spreadsheet).sessionId, 'SES-LATEST');
 
-  const badHeaders = {
-    getSheetByName: () => ({ getDataRange: () => ({ getValues: () => [['Name', 'Roll']] }) })
+  sessionRows[2][1] = 'invalid';
+  assert.throws(() => harness.call('getLatestAttendanceSession_', spreadsheet), /latest attendance session date is invalid/i);
+
+  sessionRows[2] = ['', new Date('2026-08-14T00:00:00Z'), 'Malformed latest'];
+  assert.throws(() => harness.call('getLatestAttendanceSession_', spreadsheet), /latest attendance session is invalid/i);
+});
+
+test('dashboard matching requires the exact latest session ID note', () => {
+  const harness = createHarness();
+  const dashboard = {
+    getRange: () => ({ getNotes: () => [['', '', '', 'SES-OLD', '']] })
   };
-  assert.throws(() => harness.call('getEligibleShuffleStudents_', badHeaders), /must contain/i);
+  const headers = ['S.No', 'Name', 'Roll No', '14-08-2026', '14-08-2026'];
+  assert.throws(() => harness.call(
+    'findLatestAttendanceColumn_', dashboard, headers,
+    { sessionId: 'SES-LATEST', date: new Date('2026-08-14T00:00:00Z') }, 'UTC'
+  ), /latest attendance session column was not found/i);
+});
+
+test('new-member classification compares calendar dates and treats invalid registration as existing', () => {
+  const harness = createHarness();
+  const sessionDate = new Date('2026-08-14T00:00:00Z');
+  assert.equal(harness.call('isSameShuffleDate_', new Date('2026-08-14T08:00:00Z'), sessionDate, 'UTC'), true);
+  assert.equal(harness.call('isSameShuffleDate_', new Date('2026-08-13T23:59:00Z'), sessionDate, 'UTC'), false);
+  assert.equal(harness.call('isSameShuffleDate_', 'invalid', sessionDate, 'UTC'), false);
+  assert.equal(harness.call('isSameShuffleDate_', '', sessionDate, 'UTC'), false);
+});
+
+test('new-member date comparison honors the configured time zone', () => {
+  const harness = createHarness({
+    Utilities: {
+      formatDate(date, timeZone) {
+        const offset = timeZone === 'Asia/Kolkata' ? 330 * 60 * 1000 : 0;
+        return new Date(date.getTime() + offset).toISOString().slice(0, 10);
+      }
+    }
+  });
+  const registered = new Date('2026-08-14T18:00:00Z');
+  const session = new Date('2026-08-14T20:00:00Z');
+  assert.equal(harness.call('isSameShuffleDate_', registered, session, 'UTC'), true);
+  assert.equal(harness.call('isSameShuffleDate_', registered, session, 'Asia/Kolkata'), false);
 });
 
 test('department extraction uses the final three programme letters and falls back to UNK', () => {
@@ -127,6 +186,37 @@ test('balanced capacities match required distributions and randomize extra seats
   }
 });
 
+test('actual group count is the maximum of preferred-size and new-member requirements', () => {
+  const harness = createHarness();
+  assert.equal(harness.call('calculateShuffleGroupCount_', 20, 5, 2), 4);
+  assert.equal(harness.call('calculateShuffleGroupCount_', 20, 5, 6), 6);
+  assert.equal(harness.call('calculateShuffleGroupCount_', 18, 5, 5), 5);
+  assert.equal(harness.call('calculateShuffleGroupCount_', 12, 5, 7), 7);
+  assert.equal(harness.call('calculateShuffleGroupCount_', 5, 5, 5), 5);
+});
+
+test('preferred group strength prompt validates the administrator input', () => {
+  const harness = createHarness();
+  const alerts = [];
+  const makeUi = value => ({
+    Button: { OK: 'OK' },
+    ButtonSet: { OK_CANCEL: 'OK_CANCEL' },
+    prompt: (title, message) => {
+      assert.equal(title, 'Shuffle Students');
+      assert.equal(message, 'Enter the preferred number of students per group:');
+      return { getSelectedButton: () => 'OK', getResponseText: () => value };
+    },
+    alert: message => alerts.push(message)
+  });
+  assert.equal(harness.call('promptForPreferredGroupSize_', 20, makeUi('5')), 5);
+  assert.equal(harness.call('promptForPreferredGroupSize_', 20, makeUi('0')), null);
+  assert.equal(harness.call('promptForPreferredGroupSize_', 20, makeUi('4.5')), null);
+  const cancelUi = makeUi('5');
+  cancelUi.prompt = () => ({ getSelectedButton: () => 'CANCEL', getResponseText: () => '5' });
+  assert.equal(harness.call('promptForPreferredGroupSize_', 20, cancelUi), null);
+  assert.equal(alerts.length, 2);
+});
+
 test('every student is assigned exactly once with balanced group sizes', () => {
   const harness = createHarness();
   const students = makeStudents(['CYS', 'ECE', 'EEE', 'MEC', 'CYS', 'ECE', 'EEE', 'MEC', 'CYS', 'ECE', 'EEE']);
@@ -134,6 +224,38 @@ test('every student is assigned exactly once with balanced group sizes', () => {
   assert.equal(harness.call('validateGeneratedGroups_', groups, students), true);
   const sizes = groups.map(group => group.students.length);
   assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1);
+});
+
+test('new members are seeded into separate teams and can increase group count', () => {
+  const harness = createHarness();
+  const students = makeStudents([
+    'CYS', 'CYS', 'ECE', 'EEE', 'MEC', 'CSE',
+    'CYS', 'CYS', 'CYS', 'ECE', 'EEE', 'MEC', 'CSE', 'CYS', 'ECE', 'EEE', 'MEC', 'CSE', 'CYS', 'ECE'
+  ], 6);
+  const groupCount = harness.call('calculateShuffleGroupCount_', students.length, 5, 6);
+  const groups = harness.call('buildInterdisciplinaryGroups_', students, groupCount, new Map(), new Set(), deterministicRandom(6));
+  assert.equal(groupCount, 6);
+  assert.deepEqual([...groups.map(group => group.students.length)].sort((a, b) => b - a), [4, 4, 3, 3, 3, 3]);
+  assert.ok(groups.every(group => group.students.filter(student => student.isNewMember).length <= 1));
+  assert.equal(groups.filter(group => group.students.some(student => student.isNewMember)).length, 6);
+  assert.equal(harness.call('validateGeneratedGroups_', groups, students), true);
+});
+
+test('all-new population produces one-person groups without breaking the hard constraint', () => {
+  const harness = createHarness();
+  const students = makeStudents(['CYS', 'CYS', 'ECE', 'EEE', 'MEC'], 5);
+  const groups = harness.call('buildInterdisciplinaryGroups_', students, 5, new Map(), new Set(), deterministicRandom(5));
+  assert.deepEqual([...groups.map(group => group.students.length)], [1, 1, 1, 1, 1]);
+  assert.ok(groups.every(group => group.students[0].isNewMember));
+});
+
+test('larger capacities with new members receive experienced mentors', () => {
+  const harness = createHarness();
+  const students = makeStudents(['CYS', 'ECE', 'EEE', 'MEC', 'CSE', 'CYS', 'ECE', 'EEE'], 2);
+  const groups = harness.call('buildInterdisciplinaryGroups_', students, 3, new Map(), new Set(), deterministicRandom(33));
+  const groupsWithNewMembers = groups.filter(group => group.students.some(student => student.isNewMember));
+  assert.ok(groupsWithNewMembers.every(group => group.students.length > 1));
+  assert.ok(groupsWithNewMembers.every(group => group.students.filter(student => !student.isNewMember).length >= 1));
 });
 
 test('same-department students occupy distinct groups whenever feasible', () => {
@@ -197,8 +319,9 @@ test('score comparison preserves department, recent, then historical priority', 
 test('rewriting Shuffle breaks existing merged ranges before clearing', () => {
   const harness = createHarness();
   const calls = [];
+  let writtenRows;
   const chain = {
-    setValues() { calls.push('setValues'); return this; },
+    setValues(values) { calls.push('setValues'); writtenRows = values; return this; },
     merge() { return this; },
     setFontWeight() { return this; },
     setFontSize() { return this; },
@@ -219,9 +342,20 @@ test('rewriting Shuffle breaks existing merged ranges before clearing', () => {
     setFrozenRows() {},
     setColumnWidth() {}
   };
-  const groups = [{ number: 1, students: makeStudents(['CYS', 'ECE']) }];
-  harness.call('writeShuffleSheet_', sheet, groups, '2026-08-10', new Date(), 'UTC', 2);
+  const groups = [{ number: 1, students: makeStudents(['CYS', 'ECE'], 1) }];
+  harness.call('writeShuffleSheet_', sheet, groups, '2026-08-10', new Date(), 'UTC', 2, {
+    sessionTitle: 'Latest Meeting',
+    attendanceDate: '2026-08-14',
+    newMemberCount: 1,
+    preferredGroupSize: 5,
+    normalGroupCount: 1,
+    groupCount: 1
+  });
   assert.deepEqual(calls.slice(0, 3), ['breakApart', 'clear', 'setValues']);
+  assert.ok(writtenRows.some(row => row[0] === 'Attendance Session' && row[1] === 'Latest Meeting'));
+  assert.ok(writtenRows.some(row => row[0] === 'New Members' && row[1] === 1));
+  assert.ok(writtenRows.some(row => row[4] === 'Member'));
+  assert.ok(writtenRows.some(row => row[4] === 'New'));
 });
 
 test('failed history write restores exact existing Shuffle and history sheets', () => {
@@ -335,6 +469,43 @@ test('failed first-run history write removes newly created feature sheets', () =
   assert.equal(spreadsheet.getSheetByName('Shuffle History'), null);
 });
 
+test('partial backup creation failure leaves original feature sheets untouched', () => {
+  const harness = createHarness();
+  const deleted = [];
+  const allSheets = [];
+  const shuffle = {
+    name: 'Shuffle',
+    isSheetHidden: () => false,
+    copyTo() {
+      const backup = {
+        name: 'Shuffle copy',
+        setName(value) { this.name = value; return this; },
+        hideSheet() { return this; }
+      };
+      allSheets.push(backup);
+      return backup;
+    }
+  };
+  const history = {
+    name: 'Shuffle History',
+    isSheetHidden: () => false,
+    copyTo() { throw new Error('backup failed'); }
+  };
+  allSheets.push(shuffle, history);
+  const spreadsheet = {
+    getSheetByName(name) { return allSheets.find(sheet => sheet.name === name) || null; },
+    deleteSheet(sheet) { deleted.push(sheet.name); allSheets.splice(allSheets.indexOf(sheet), 1); }
+  };
+
+  assert.throws(() => harness.call(
+    'writeShuffleResultsSafely_', spreadsheet, [], [], '2026-08-10', new Date(), 'UTC', 0, {}
+  ), /backup failed/);
+  assert.equal(spreadsheet.getSheetByName('Shuffle'), shuffle);
+  assert.equal(spreadsheet.getSheetByName('Shuffle History'), history);
+  assert.equal(deleted.length, 1);
+  assert.match(deleted[0], /Shuffle Backup/);
+});
+
 test('week key uses Monday and current-week history is excluded from pair penalties', () => {
   const harness = createHarness();
   assert.equal(harness.call('getWeekKey_', new Date('2026-08-13T12:00:00Z'), 'UTC'), '2026-08-10');
@@ -377,31 +548,49 @@ test('same-week history replacement retains older weeks and writes one official 
   assert.equal(written.find(row => row[0] === '2026-08-10')[3], 'C');
 });
 
-test('cancel, invalid count, missing Students, and invalid headers do not touch output sheets', () => {
-  for (const scenario of ['cancel', 'invalid', 'missing', 'headers']) {
-    let outputTouches = 0;
-    const rows = scenario === 'headers'
-      ? [['Wrong', 'Headers'], ['x', 'y']]
-      : [['Roll Number', 'Full Name', 'Status'], ['CB.SC.U4CYS25001', 'Student', 'Active']];
+test('no latest session, no P students, invalid preference, and classification failure preserve output', () => {
+  for (const scenario of ['no-session', 'no-present', 'invalid-preference', 'classification']) {
+    let outputMutations = 0;
+    const sessionRows = scenario === 'no-session'
+      ? [['Session ID', 'Session Date', 'Session Title']]
+      : [['Session ID', 'Session Date', 'Session Title'], ['SES-1', new Date('2026-08-14T00:00:00Z'), 'Latest']];
+    const dashboardRows = [
+      ['S.No', 'Name', 'Roll No', '14-08-2026'],
+      [1, 'Student', 'CB.SC.U4CYS25001', scenario === 'no-present' ? 'A' : 'P']
+    ];
     const spreadsheet = {
       getSheetByName(name) {
-        if (name === 'Students') {
-          if (scenario === 'missing') return null;
-          return { getDataRange: () => ({ getValues: () => rows }) };
+        if (name === 'Sessions') return { getDataRange: () => ({ getValues: () => sessionRows }) };
+        if (name === 'Attendance Dashboard') {
+          return {
+            getDataRange: () => ({ getValues: () => dashboardRows }),
+            getRange: () => ({ getNotes: () => [['', '', '', 'SES-1']] })
+          };
         }
-        outputTouches += 1;
+        if (name === 'Students') {
+          return {
+            getDataRange: () => {
+              if (scenario === 'classification') throw new Error('classification failed');
+              return { getValues: () => [
+                ['Roll Number', 'Registered At'],
+                ['CB.SC.U4CYS25001', new Date('2026-08-01T00:00:00Z')]
+              ] };
+            }
+          };
+        }
         return null;
       },
-      insertSheet() { outputTouches += 1; },
-      toast() { outputTouches += 1; }
+      insertSheet() { outputMutations += 1; },
+      deleteSheet() { outputMutations += 1; },
+      toast() { outputMutations += 1; }
     };
     const alerts = [];
     const ui = {
       Button: { OK: 'OK' },
       ButtonSet: { OK_CANCEL: 'OK_CANCEL' },
       prompt: () => ({
-        getSelectedButton: () => scenario === 'cancel' ? 'CANCEL' : 'OK',
-        getResponseText: () => scenario === 'invalid' ? '0' : '1'
+        getSelectedButton: () => 'OK',
+        getResponseText: () => scenario === 'invalid-preference' ? '0' : '1'
       }),
       alert: message => alerts.push(message)
     };
@@ -410,8 +599,45 @@ test('cancel, invalid count, missing Students, and invalid headers do not touch 
       SpreadsheetApp: { getUi: () => ui }
     });
     harness.call('shuffleStudentsIntoGroups');
-    assert.equal(outputTouches, 0, scenario);
+    assert.equal(outputMutations, 0, scenario);
   }
+});
+
+test('candidate generation failure preserves Shuffle History', () => {
+  let outputMutations = 0;
+  const spreadsheet = {
+    getSheetByName(name) {
+      if (name === 'Sessions') return { getDataRange: () => ({ getValues: () => [
+        ['Session ID', 'Session Date', 'Session Title'],
+        ['SES-1', new Date('2026-08-14T00:00:00Z'), 'Latest']
+      ] }) };
+      if (name === 'Attendance Dashboard') return {
+        getDataRange: () => ({ getValues: () => [
+          ['S.No', 'Name', 'Roll No', '14-08-2026'],
+          [1, 'Student', 'CB.SC.U4CYS25001', 'P']
+        ] }),
+        getRange: () => ({ getNotes: () => [['', '', '', 'SES-1']] })
+      };
+      if (name === 'Students') return { getDataRange: () => ({ getValues: () => [
+        ['Roll Number', 'Registered At'], ['CB.SC.U4CYS25001', new Date('2026-08-01T00:00:00Z')]
+      ] }) };
+      if (name === 'Shuffle History') return null;
+      return null;
+    },
+    insertSheet() { outputMutations += 1; },
+    deleteSheet() { outputMutations += 1; },
+    toast() { outputMutations += 1; }
+  };
+  const ui = {
+    Button: { OK: 'OK' },
+    ButtonSet: { OK_CANCEL: 'OK_CANCEL' },
+    prompt: () => ({ getSelectedButton: () => 'OK', getResponseText: () => '1' }),
+    alert() {}
+  };
+  const harness = createHarness({ spreadsheet, SpreadsheetApp: { getUi: () => ui } });
+  harness.context.buildInterdisciplinaryGroups_ = () => { throw new Error('candidate failed'); };
+  harness.call('shuffleStudentsIntoGroups');
+  assert.equal(outputMutations, 0);
 });
 
 test('add-only boundary leaves protected attendance and Vercel files byte-identical to main', () => {
