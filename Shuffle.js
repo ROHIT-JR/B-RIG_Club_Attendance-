@@ -1,5 +1,5 @@
 /**
- * Weekly interdisciplinary team generation with repeat-pair avoidance.
+ * Weekly team generation with deterministic Female coverage.
  */
 
 const SHUFFLE_SHEET_NAME_ = 'Shuffle';
@@ -36,11 +36,10 @@ function finalizeShuffleWithAbsent(preferredGroupSize, selectedRolls, expectedSe
   const generatedAt = new Date();
   const normalizedExpectedSessionId = String(expectedSessionId || '').trim();
   if (!normalizedExpectedSessionId) throw new Error('Attendance session changed. Start Shuffle again.');
-  let snapshot;
   let result;
 
   try {
-    withAttendanceSnapshotLock_(() => {
+    withShuffleLock_(() => {
       const latestSession = getLatestAttendanceSession_(ss);
       if (latestSession.sessionId !== normalizedExpectedSessionId) {
         throw new Error('A newer attendance session is available. Start Shuffle again.');
@@ -50,68 +49,41 @@ function finalizeShuffleWithAbsent(preferredGroupSize, selectedRolls, expectedSe
       const absentStudents = getEligibleAbsentShuffleStudents_(ss, presentStudents, latestSession, timeZone, attendanceContext);
       const students = buildFinalShuffleParticipants_(presentStudents, absentStudents, selectedRolls);
       const preferredSize = validatePreferredGroupSize_(preferredGroupSize, students.length);
-      const newMemberCount = students.filter(student => student.isNewMember).length;
-      const normalGroupCount = Math.ceil(students.length / preferredSize);
-      const groupCount = calculateShuffleGroupCount_(students.length, preferredSize, newMemberCount);
-      snapshot = {
-        latestSession,
-        presentStudents,
-        students,
-        preferredSize,
-        newMemberCount,
-        normalGroupCount,
-        groupCount
-      };
-    });
-
-    if (!snapshot.students.length) {
-      ss.toast('No participants selected. Existing Shuffle output was not changed.', 'Shuffle empty', 6);
-      return { success: true, participantCount: 0, groupCount: 0, empty: true };
-    }
-
-    withShuffleLock_(() => {
+      if (!students.length) {
+        result = { success: true, participantCount: 0, groupCount: 0, empty: true };
+        return;
+      }
+      const groupCount = calculateShuffleGroupCount_(students.length, preferredSize);
       const weekKey = getWeekKey_(generatedAt, timeZone);
       const history = readShuffleHistory_(ss);
-      const currentPairHistory = buildPairHistory_(history, weekKey);
       const seed = createShuffleSeed_(
-        snapshot.latestSession.sessionId,
+        latestSession.sessionId,
         weekKey,
-        snapshot.students,
-        snapshot.preferredSize,
-        snapshot.groupCount,
-        currentPairHistory
+        students,
+        preferredSize,
+        groupCount
       );
       const randomFn = createSeededRandom_(seed);
-      const groups = snapshot.students.length
-        ? buildInterdisciplinaryGroups_(
-          snapshot.students,
-          snapshot.groupCount,
-          currentPairHistory.pairCounts,
-          currentPairHistory.recentPairs,
-          randomFn
-        )
-        : [];
-      if (snapshot.students.length) validateGeneratedGroups_(groups, snapshot.students);
-      const metrics = calculateShuffleMetrics_(groups, snapshot.students);
+      const groups = buildFemaleCoveredGroups_(students, groupCount, preferredSize, randomFn);
+      const metrics = calculateShuffleMetrics_(groups, students);
+      validateGeneratedGroups_(groups, students, preferredSize, metrics);
 
-      writeShuffleResultsSafely_(ss, history, groups, weekKey, generatedAt, timeZone, snapshot.students.length, {
-        sessionTitle: snapshot.latestSession.title,
-        attendanceDate: Utilities.formatDate(snapshot.latestSession.date, timeZone, 'yyyy-MM-dd'),
-        presentCount: snapshot.presentStudents.length,
-        newMemberCount: snapshot.newMemberCount,
-        adminAddedCount: snapshot.students.filter(
+      writeShuffleResultsSafely_(ss, history, groups, weekKey, generatedAt, timeZone, students.length, {
+        sessionTitle: latestSession.title,
+        attendanceDate: Utilities.formatDate(latestSession.date, timeZone, 'yyyy-MM-dd'),
+        presentCount: presentStudents.length,
+        adminAddedCount: students.filter(
           student => student.participationSource === 'Admin Added (Absent)'
         ).length,
-        preferredGroupSize: snapshot.preferredSize,
-        normalGroupCount: snapshot.normalGroupCount,
-        groupCount: snapshot.groupCount,
+        preferredGroupSize: preferredSize,
+        groupCount,
         seed,
         metrics
       });
       result = {
         success: true,
-        participantCount: snapshot.students.length,
-        groupCount: snapshot.groupCount
+        participantCount: students.length,
+        groupCount
       };
     });
   } catch (error) {
@@ -121,8 +93,13 @@ function finalizeShuffleWithAbsent(preferredGroupSize, selectedRolls, expectedSe
       : 'Teams could not be generated. Start Shuffle again.');
   }
 
+  if (result.empty) {
+    ss.toast('No participants selected. Existing Shuffle output was not changed.', 'Shuffle empty', 6);
+    return result;
+  }
+
   ss.toast(
-    `${result.participantCount} students shuffled into ${result.groupCount} interdisciplinary groups.`,
+    `${result.participantCount} students shuffled into ${result.groupCount} balanced teams.`,
     'Shuffle complete',
     6
   );
@@ -153,7 +130,7 @@ function getEligibleShuffleStudents_(spreadsheet, session, timeZone, suppliedCon
       fullName,
       department: extractDepartmentFromRoll_(rollNumber),
       gender: context.studentMetadata.get(rollNumber)?.gender || '',
-      isNewMember: !context.priorPresentRolls.has(rollNumber),
+      collegeEmail: context.studentMetadata.get(rollNumber)?.collegeEmail || '',
       participationSource: 'Present'
     });
   }
@@ -188,7 +165,7 @@ function getEligibleAbsentShuffleStudents_(spreadsheet, presentStudents, session
       fullName,
       department: extractDepartmentFromRoll_(rollNumber),
       gender: metadata.gender,
-      isNewMember: !context.priorPresentRolls.has(rollNumber),
+      collegeEmail: metadata.collegeEmail,
       participationSource: 'Admin Added (Absent)'
     });
   });
@@ -201,52 +178,15 @@ function getShuffleAttendanceContext_(spreadsheet, session, timeZone) {
   const dashboardData = dashboard.getDataRange().getValues();
   const dashboardHeaders = dashboardData[0] || [];
   const attendanceColumn = findLatestAttendanceColumn_(dashboard, dashboardHeaders, session, timeZone);
-  const notes = dashboard.getRange(1, 1, 1, dashboardHeaders.length).getNotes()[0];
-  const priorSessionIds = getPriorShuffleSessionIds_(spreadsheet, session.sessionId);
-  const priorColumns = notes
-    .map((note, index) => priorSessionIds.has(String(note || '').trim()) ? index : -1)
-    .filter(index => index !== -1 && index !== attendanceColumn);
   const dashboardRollIndex = dashboardHeaders.indexOf('Roll No');
   if (dashboardRollIndex === -1) throw new Error('Attendance Dashboard must contain the Roll No header.');
-  const priorPresentRolls = new Set();
-  for (let rowIndex = 1; rowIndex < dashboardData.length; rowIndex++) {
-    const rollNumber = normalizeRollNo(dashboardData[rowIndex][dashboardRollIndex]);
-    if (rollNumber && priorColumns.some(column =>
-      String(dashboardData[rowIndex][column] || '').trim().toUpperCase() === CONFIG.MARKERS.PRESENT
-    )) priorPresentRolls.add(rollNumber);
-  }
   return {
     dashboard,
     dashboardData,
     dashboardHeaders,
     attendanceColumn,
-    priorPresentRolls,
     studentMetadata: getShuffleStudentMetadata_(spreadsheet)
   };
-}
-
-function getPriorShuffleSessionIds_(spreadsheet, latestSessionId) {
-  const sheet = spreadsheet.getSheetByName(CONFIG.SHEETS.SESSIONS);
-  if (!sheet) throw new Error('Sessions sheet is missing.');
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0] || [];
-  const idIndex = headers.indexOf('Session ID');
-  const dateIndex = headers.indexOf('Session Date');
-  if (idIndex === -1 || dateIndex === -1) throw new Error('Sessions sheet headers are invalid.');
-  const sessionIds = [];
-  for (let rowIndex = 1; rowIndex < data.length; rowIndex++) {
-    const sessionId = String(data[rowIndex][idIndex] || '').trim();
-    if (!sessionId || !toValidShuffleDate_(data[rowIndex][dateIndex])) {
-      throw new Error('Attendance session history contains invalid metadata.');
-    }
-    sessionIds.push(sessionId);
-  }
-  if (new Set(sessionIds).size !== sessionIds.length) {
-    throw new Error('Attendance session history contains duplicate session IDs.');
-  }
-  const latestIndex = sessionIds.indexOf(latestSessionId);
-  if (latestIndex === -1) throw new Error('Latest attendance session was not found in session history.');
-  return new Set(sessionIds.slice(0, latestIndex));
 }
 
 function getShuffleStudentMetadata_(spreadsheet) {
@@ -258,8 +198,9 @@ function getShuffleStudentMetadata_(spreadsheet) {
   const nameIndex = headers.indexOf('Full Name');
   const statusIndex = headers.indexOf('Status');
   const genderIndex = headers.indexOf(CONFIG.GENDER.HEADER);
-  if ([rollIndex, nameIndex, statusIndex, genderIndex].includes(-1)) {
-    throw new Error('Students sheet must contain Roll Number, Full Name, Status, and Gender headers.');
+  const emailIndex = headers.indexOf('Official Email');
+  if ([rollIndex, nameIndex, statusIndex, genderIndex, emailIndex].includes(-1)) {
+    throw new Error('Students sheet must contain Roll Number, Full Name, Status, Official Email, and Gender headers.');
   }
   const metadata = new Map();
   for (let rowIndex = 1; rowIndex < data.length; rowIndex++) {
@@ -267,12 +208,16 @@ function getShuffleStudentMetadata_(spreadsheet) {
     if (!rollNumber) continue;
     const rawGender = String(data[rowIndex][genderIndex] || '');
     const gender = normalizeGender(rawGender);
-    if (rawGender && gender !== rawGender) throw new Error('Students sheet contains an invalid Gender value.');
     if (metadata.has(rollNumber)) throw new Error('Students sheet contains duplicate normalized roll numbers.');
+    const rawEmail = String(data[rowIndex][emailIndex] || '').trim();
+    const collegeEmail = rawEmail && isValidOfficialEmail(rawEmail, rollNumber)
+      ? normalizeOfficialEmail(rawEmail)
+      : '';
     metadata.set(rollNumber, {
       fullName: String(data[rowIndex][nameIndex] || '').trim(),
       status: String(data[rowIndex][statusIndex] || '').trim().toUpperCase(),
-      gender
+      gender: rawGender === 'Female' ? 'Female' : gender === 'Male' && rawGender === 'Male' ? 'Male' : '',
+      collegeEmail
     });
   }
   return metadata;
@@ -305,8 +250,7 @@ function showShuffleAbsentSelector_(presentStudents, absentStudents, session, pr
     absentStudents: absentStudents.map(student => ({
       rollNumber: student.rollNumber,
       fullName: student.fullName,
-      department: student.department,
-      memberType: student.isNewMember ? 'New' : 'Existing'
+      department: student.department
     }))
   };
   const template = HtmlService.createTemplateFromFile('ShuffleAbsentSelector');
@@ -399,8 +343,8 @@ function validatePreferredGroupSize_(value, participantCount) {
   return preferredSize;
 }
 
-function calculateShuffleGroupCount_(studentCount, preferredGroupSize, newMemberCount) {
-  return Math.max(Math.ceil(studentCount / preferredGroupSize), newMemberCount);
+function calculateShuffleGroupCount_(studentCount, preferredGroupSize) {
+  return studentCount === 0 ? 0 : Math.ceil(studentCount / preferredGroupSize);
 }
 
 function getWeekKey_(date, timeZone) {
@@ -430,40 +374,6 @@ function readShuffleHistory_(spreadsheet) {
   })).filter(row => row.weekKey && Number.isInteger(row.groupNumber) && row.rollNumber);
 }
 
-function buildPairHistory_(historyRows, currentWeekKey) {
-  const earlierRows = historyRows.filter(row => row.weekKey && row.weekKey < currentWeekKey);
-  const previousWeeks = [...new Set(earlierRows.map(row => row.weekKey))].sort();
-  const recentWeekKey = previousWeeks.length ? previousWeeks[previousWeeks.length - 1] : '';
-  const pairCounts = new Map();
-  const recentPairs = new Set();
-  const teams = new Map();
-
-  earlierRows.forEach(row => {
-    const teamKey = `${row.weekKey}\u0000${row.groupNumber}`;
-    if (!teams.has(teamKey)) teams.set(teamKey, []);
-    teams.get(teamKey).push(row.rollNumber);
-  });
-
-  teams.forEach((rollNumbers, teamKey) => {
-    const uniqueRolls = [...new Set(rollNumbers)].sort();
-    const weekKey = teamKey.split('\u0000', 1)[0];
-    for (let first = 0; first < uniqueRolls.length; first++) {
-      for (let second = first + 1; second < uniqueRolls.length; second++) {
-        const key = shufflePairKey_(uniqueRolls[first], uniqueRolls[second]);
-        pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
-        if (weekKey === recentWeekKey) recentPairs.add(key);
-      }
-    }
-  });
-  return { pairCounts, recentPairs, recentWeekKey };
-}
-
-function shufflePairKey_(firstRoll, secondRoll) {
-  return firstRoll < secondRoll
-    ? `${firstRoll}\u0000${secondRoll}`
-    : `${secondRoll}\u0000${firstRoll}`;
-}
-
 function shuffleArray_(values, randomFn) {
   const shuffled = values.slice();
   for (let index = shuffled.length - 1; index > 0; index--) {
@@ -483,120 +393,44 @@ function buildGroupCapacities_(studentCount, groupCount, randomFn) {
   return capacities;
 }
 
-function buildInterdisciplinaryGroups_(students, groupCount, pairCounts, recentPairs, randomFn) {
+function buildFemaleCoveredGroups_(students, groupCount, preferredSize, randomFn) {
   const orderedStudents = students.slice().sort((first, second) =>
     first.rollNumber.localeCompare(second.rollNumber)
   );
-  const attempts = Math.max(20, Math.min(50, students.length * 2));
-  let bestGroups = null;
-  let bestScore = null;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const capacities = buildGroupCapacities_(orderedStudents.length, groupCount, randomFn);
-    const groups = capacities.map((capacity, index) => ({ number: index + 1, capacity, students: [] }));
-    const newMembers = shuffleArray_(orderedStudents.filter(student => student.isNewMember === true), randomFn);
-    const seedGroups = shuffleArray_(groups, randomFn)
-      .sort((first, second) => second.capacity - first.capacity);
-    newMembers.forEach((student, index) => {
-      seedGroups[index].students.push(student);
-    });
-
-    const departmentCounts = new Map();
-    orderedStudents.forEach(student => {
-      departmentCounts.set(student.department, (departmentCounts.get(student.department) || 0) + 1);
-    });
-    const experienced = shuffleArray_(orderedStudents.filter(student => student.isNewMember !== true), randomFn)
-      .sort((first, second) => {
-        const genderPriority = Number(second.gender === 'Female') - Number(first.gender === 'Female');
-        if (genderPriority !== 0) return genderPriority;
-        return (departmentCounts.get(second.department) || 0) - (departmentCounts.get(first.department) || 0);
-      });
-
-    experienced.forEach(student => {
-      const candidates = groups.filter(group => group.students.length < group.capacity);
-      const scored = candidates.map(group => scoreStudentPlacement_(student, group, pairCounts, recentPairs, randomFn));
-      scored.sort((first, second) => compareShuffleScores_(first.score, second.score));
-      const bestScoreForStudent = scored[0].score;
-      const bestCandidates = scored.filter(candidate => compareShuffleScores_(candidate.score, bestScoreForStudent) === 0);
-      bestCandidates[Math.floor(randomFn() * bestCandidates.length)].group.students.push(student);
-    });
-
-    const candidateScore = scoreCandidateGroups_(groups, pairCounts, recentPairs);
-    if (bestScore === null || compareShuffleScores_(candidateScore, bestScore) < 0) {
-      bestScore = candidateScore;
-      bestGroups = groups;
-    }
+  const capacities = buildGroupCapacities_(orderedStudents.length, groupCount, randomFn);
+  if (capacities.some(capacity => capacity > preferredSize)) {
+    throw new Error('Calculated team capacity exceeds the preferred team size.');
   }
-  if (!bestGroups) throw new Error('No candidate grouping could be generated.');
-  return bestGroups;
-}
-
-function scoreStudentPlacement_(student, group, pairCounts, recentPairs, randomFn) {
-  const sameDepartmentCount = group.students.filter(member => member.department === student.department).length;
-  let recentRepeatCount = 0;
-  let historicalPairCount = 0;
-  group.students.forEach(member => {
-    const key = shufflePairKey_(student.rollNumber, member.rollNumber);
-    if (recentPairs.has(key)) recentRepeatCount += 1;
-    historicalPairCount += pairCounts.get(key) || 0;
+  const groups = capacities.map((capacity, index) => ({ number: index + 1, capacity, students: [] }));
+  const femaleParticipants = shuffleArray_(
+    orderedStudents.filter(student => student.gender === 'Female'), randomFn
+  );
+  const assignedRolls = new Set();
+  femaleParticipants.slice(0, groupCount).forEach((student, index) => {
+    groups[index].students.push(student);
+    assignedRolls.add(student.rollNumber);
   });
-  const remainingAfterPlacement = group.capacity - group.students.length - 1;
-  const mentoringPriority = student.isNewMember !== true &&
-    group.students.some(member => member.isNewMember === true) &&
-    !group.students.some(member => member.isNewMember !== true) ? -1 : 0;
-  const femaleCoveragePriority = student.gender === 'Female' &&
-    !group.students.some(member => member.gender === 'Female') ? -1 : 0;
-  return {
-    group,
-    score: [mentoringPriority, femaleCoveragePriority, sameDepartmentCount,
-      recentRepeatCount, historicalPairCount, -remainingAfterPlacement],
-    tieBreaker: randomFn()
-  };
-}
 
-function scoreCandidateGroups_(groups, pairCounts, recentPairs) {
-  let departmentPairs = 0;
-  let recentRepeats = 0;
-  let historicalRepeats = 0;
-  let unsupportedNewTeams = 0;
-  groups.forEach(group => {
-    if (group.students.some(student => student.isNewMember === true) &&
-        !group.students.some(student => student.isNewMember !== true)) unsupportedNewTeams += 1;
-    const departmentCounts = {};
-    group.students.forEach(student => {
-      departmentCounts[student.department] = (departmentCounts[student.department] || 0) + 1;
-    });
-    Object.values(departmentCounts).forEach(count => { departmentPairs += count * (count - 1) / 2; });
-    for (let first = 0; first < group.students.length; first++) {
-      for (let second = first + 1; second < group.students.length; second++) {
-        const key = shufflePairKey_(group.students[first].rollNumber, group.students[second].rollNumber);
-        if (recentPairs.has(key)) recentRepeats += 1;
-        historicalRepeats += pairCounts.get(key) || 0;
-      }
-    }
+  const remaining = shuffleArray_(
+    orderedStudents.filter(student => !assignedRolls.has(student.rollNumber)), randomFn
+  );
+  remaining.forEach(student => {
+    const available = groups.filter(group => group.students.length < group.capacity);
+    if (!available.length) throw new Error('No team capacity remains for a participant.');
+    const smallestSize = Math.min(...available.map(group => group.students.length));
+    const candidates = available.filter(group => group.students.length === smallestSize);
+    const selected = candidates[Math.floor(randomFn() * candidates.length)];
+    selected.students.push(student);
   });
-  const metrics = calculateShuffleMetrics_(groups, groups.flatMap(group => group.students));
-  return [
-    unsupportedNewTeams,
-    metrics.femaleCoverageTarget - metrics.femaleCoveredTeams,
-    metrics.multidisciplinaryTarget - metrics.multidisciplinaryTeams,
-    departmentPairs,
-    recentRepeats,
-    historicalRepeats
-  ];
+  return groups;
 }
 
-function createShuffleSeed_(sessionId, weekKey, students, preferredSize, groupCount, pairHistory) {
+function createShuffleSeed_(sessionId, weekKey, students, preferredSize, groupCount) {
   const studentFingerprint = students.map(student => [
     student.rollNumber,
-    student.department,
-    student.isNewMember === true ? 'N' : 'E',
     student.participationSource
   ].join(':')).sort().join('|');
-  const pairFingerprint = pairHistory
-    ? [...pairHistory.pairCounts.entries()].sort().map(entry => entry.join(':')).join('|')
-    : '';
-  const recentFingerprint = pairHistory ? [...pairHistory.recentPairs].sort().join('|') : '';
-  const input = `${sessionId}|${weekKey}|${preferredSize}|${groupCount}|${studentFingerprint}|${pairFingerprint}|${recentFingerprint}|v2`;
+  const input = `${sessionId}|${weekKey}|${preferredSize}|${groupCount}|${studentFingerprint}|v3`;
   let hash = 2166136261;
   for (let index = 0; index < input.length; index++) {
     hash ^= input.charCodeAt(index);
@@ -616,78 +450,54 @@ function createSeededRandom_(seed) {
 function calculateShuffleMetrics_(groups, students) {
   const nonemptyGroups = groups.filter(group => group.students.length > 0);
   const sizes = nonemptyGroups.map(group => group.students.length);
-  const genuineNewCount = students.filter(student => student.isNewMember === true).length;
-  const experiencedCount = students.length - genuineNewCount;
   const femaleCount = students.filter(student => student.gender === 'Female').length;
   const femaleCoveredTeams = nonemptyGroups.filter(group =>
     group.students.some(student => student.gender === 'Female')
   ).length;
   const femaleCoverageTarget = Math.min(nonemptyGroups.length, femaleCount);
-  const knownDepartmentCounts = {};
-  students.forEach(student => {
-    if (student.department && student.department !== 'UNK') {
-      knownDepartmentCounts[student.department] = (knownDepartmentCounts[student.department] || 0) + 1;
-    }
-  });
-  const knownDepartmentTotal = Object.values(knownDepartmentCounts).reduce((sum, count) => sum + count, 0);
-  const largestDepartment = Math.max(0, ...Object.values(knownDepartmentCounts));
-  const groupsWithTwoSeats = nonemptyGroups.filter(group => group.capacity >= 2).length;
-  const multidisciplinaryTarget = Object.keys(knownDepartmentCounts).length < 2
-    ? 0
-    : Math.min(groupsWithTwoSeats, Math.floor(knownDepartmentTotal / 2), knownDepartmentTotal - largestDepartment);
-  const multidisciplinaryTeams = nonemptyGroups.filter(group =>
-    new Set(group.students.map(student => student.department).filter(department => department && department !== 'UNK')).size >= 2
-  ).length;
-  const newMemberTeams = nonemptyGroups.filter(group =>
-    group.students.some(student => student.isNewMember === true)
-  );
-  const supportedNewTeams = newMemberTeams.filter(group =>
-    group.students.some(student => student.isNewMember !== true)
-  ).length;
+  const missingCollegeEmailCount = students.filter(student => !student.collegeEmail).length;
   const warnings = [];
   if (femaleCoveredTeams < femaleCoverageTarget) warnings.push('Female coverage did not reach its feasible target.');
-  if (multidisciplinaryTeams < multidisciplinaryTarget) warnings.push('Department coverage did not reach its unconstrained upper bound.');
-  if (students.some(student => !student.gender)) warnings.push('Some participants have unknown Gender data.');
-  if (students.some(student => !student.department || student.department === 'UNK')) warnings.push('Some departments could not be derived from roll numbers.');
-  if (supportedNewTeams < newMemberTeams.length) warnings.push('Experienced members were insufficient to support every newcomer team.');
+  if (femaleCount < nonemptyGroups.length) {
+    warnings.push(`${nonemptyGroups.length - femaleCount} teams could not receive a Female participant because only ${femaleCount} were available.`);
+  }
+  if (missingCollegeEmailCount) warnings.push(`${missingCollegeEmailCount} participants have a missing or invalid College Email.`);
   return {
     minSize: sizes.length ? Math.min(...sizes) : 0,
     maxSize: sizes.length ? Math.max(...sizes) : 0,
-    genuineNewCount,
-    experiencedCount,
-    teamsWithMultipleNew: nonemptyGroups.filter(group =>
-      group.students.filter(student => student.isNewMember === true).length > 1
-    ).length,
-    newMemberTeams: newMemberTeams.length,
-    supportedNewTeams,
-    unsupportedNewTeams: newMemberTeams.length - supportedNewTeams,
+    expectedCapacities: groups.map(group => group.capacity),
+    femaleCount,
     femaleCoveredTeams,
     femaleCoverageTarget,
-    multidisciplinaryTeams,
-    multidisciplinaryTarget,
+    missingCollegeEmailCount,
     warnings
   };
 }
 
-function compareShuffleScores_(first, second) {
-  for (let index = 0; index < Math.max(first.length, second.length); index++) {
-    const difference = (first[index] || 0) - (second[index] || 0);
-    if (difference !== 0) return difference;
-  }
-  return 0;
-}
-
-function validateGeneratedGroups_(groups, students) {
+function validateGeneratedGroups_(groups, students, preferredSize, reportedMetrics) {
   if (!Array.isArray(groups) || !groups.length) throw new Error('No groups were generated.');
   const assigned = groups.flatMap(group => group.students.map(student => student.rollNumber));
   const expected = students.map(student => student.rollNumber);
   const sizes = groups.map(group => group.students.length);
-  if (assigned.length !== expected.length || new Set(assigned).size !== expected.length ||
+  const expectedGroupCount = Math.ceil(students.length / preferredSize);
+  if (groups.length !== expectedGroupCount ||
+      assigned.length !== expected.length || new Set(assigned).size !== expected.length ||
       expected.some(rollNumber => !assigned.includes(rollNumber)) ||
       Math.max(...sizes) - Math.min(...sizes) > 1 ||
       groups.some(group => group.students.length !== group.capacity) ||
-      groups.some(group => group.students.filter(student => student.isNewMember === true).length > 1)) {
+      groups.some(group => group.students.length > preferredSize)) {
     throw new Error('Generated groups failed validation.');
+  }
+  const actualMetrics = calculateShuffleMetrics_(groups, students);
+  if (actualMetrics.femaleCoveredTeams !== actualMetrics.femaleCoverageTarget ||
+      reportedMetrics.femaleCount !== actualMetrics.femaleCount ||
+      reportedMetrics.femaleCoveredTeams !== actualMetrics.femaleCoveredTeams ||
+      reportedMetrics.femaleCoverageTarget !== actualMetrics.femaleCoverageTarget ||
+      reportedMetrics.missingCollegeEmailCount !== actualMetrics.missingCollegeEmailCount ||
+      reportedMetrics.minSize !== actualMetrics.minSize ||
+      reportedMetrics.maxSize !== actualMetrics.maxSize ||
+      JSON.stringify(reportedMetrics.expectedCapacities) !== JSON.stringify(actualMetrics.expectedCapacities)) {
+    throw new Error('Generated team metrics failed validation.');
   }
   return true;
 }
@@ -713,6 +523,7 @@ function writeShuffleResultsSafely_(spreadsheet, history, groups, weekKey, gener
     if (existingShuffle) {
       const backup = {
         originalName: SHUFFLE_SHEET_NAME_,
+        originalSheet: existingShuffle,
         hidden: existingShuffle.isSheetHidden(),
         sheet: existingShuffle.copyTo(spreadsheet)
       };
@@ -722,6 +533,7 @@ function writeShuffleResultsSafely_(spreadsheet, history, groups, weekKey, gener
     if (existingHistory) {
       const backup = {
         originalName: SHUFFLE_HISTORY_SHEET_NAME_,
+        originalSheet: existingHistory,
         hidden: existingHistory.isSheetHidden(),
         sheet: existingHistory.copyTo(spreadsheet)
       };
@@ -755,14 +567,39 @@ function writeShuffleResultsSafely_(spreadsheet, history, groups, weekKey, gener
 
 function restoreShuffleBackups_(spreadsheet, backups) {
   const names = [SHUFFLE_SHEET_NAME_, SHUFFLE_HISTORY_SHEET_NAME_];
+  const backedNames = new Set(backups.map(backup => backup.originalName));
   names.forEach(name => {
     const current = spreadsheet.getSheetByName(name);
-    if (current) spreadsheet.deleteSheet(current);
+    if (current && !backedNames.has(name)) spreadsheet.deleteSheet(current);
   });
   backups.forEach(backup => {
-    backup.sheet.setName(backup.originalName);
-    if (!backup.hidden) backup.sheet.showSheet();
+    restoreShuffleSheetInPlace_(backup.originalSheet, backup.sheet);
+    if (backup.hidden) backup.originalSheet.hideSheet();
+    else backup.originalSheet.showSheet();
+    spreadsheet.deleteSheet(backup.sheet);
   });
+}
+
+function restoreShuffleSheetInPlace_(originalSheet, backupSheet) {
+  if (originalSheet.getLastRow() > 0 && originalSheet.getLastColumn() > 0) {
+    originalSheet.getDataRange().breakApart();
+  }
+  originalSheet.clear();
+  const sourceRange = backupSheet.getDataRange();
+  const rowCount = sourceRange.getNumRows();
+  const columnCount = sourceRange.getNumColumns();
+  sourceRange.copyTo(originalSheet.getRange(1, 1, rowCount, columnCount));
+  sourceRange.getMergedRanges().forEach(range => {
+    originalSheet.getRange(range.getRow(), range.getColumn(), range.getNumRows(), range.getNumColumns()).merge();
+  });
+  originalSheet.setFrozenRows(backupSheet.getFrozenRows());
+  originalSheet.setFrozenColumns(backupSheet.getFrozenColumns());
+  for (let column = 1; column <= columnCount; column++) {
+    originalSheet.setColumnWidth(column, backupSheet.getColumnWidth(column));
+  }
+  for (let row = 1; row <= rowCount; row++) {
+    originalSheet.setRowHeight(row, backupSheet.getRowHeight(row));
+  }
 }
 
 function replaceCurrentWeekHistory_(sheet, existingHistory, weekKey, generatedAt, groups) {
@@ -784,31 +621,24 @@ function writeShuffleSheet_(sheet, groups, weekKey, generatedAt, timeZone, total
   const info = shuffleInfo || {};
   const metrics = info.metrics || calculateShuffleMetrics_(groups, groups.flatMap(group => group.students));
   const rows = [
-    ['B-RIG Weekly Interdisciplinary Team Shuffle', '', '', '', '', ''],
+    ['B-RIG Weekly Team Shuffle', '', '', '', '', ''],
     ['Attendance Session', info.sessionTitle || 'Attendance session', '', '', '', ''],
     ['Attendance Date', info.attendanceDate || '', '', '', '', ''],
-    ['Generated', Utilities.formatDate(generatedAt, timeZone, 'yyyy-MM-dd HH:mm'), '', '', '', ''],
+    ['Generated At', Utilities.formatDate(generatedAt, timeZone, 'yyyy-MM-dd HH:mm'), '', '', '', ''],
     ['Week', weekKey, '', '', '', ''],
-    ['Students Present', Number.isFinite(info.presentCount) ? info.presentCount : totalStudents, '', '', '', ''],
-    ['Final Participants', totalStudents, '', '', '', ''],
+    ['Latest Present Students', Number.isFinite(info.presentCount) ? info.presentCount : totalStudents, '', '', '', ''],
     ['Admin Added (Absent)', Number(info.adminAddedCount) || 0, '', '', '', ''],
-    ['Genuine New Members', metrics.genuineNewCount, '', '', '', ''],
-    ['Experienced Members', metrics.experiencedCount, '', '', '', ''],
-    ['Preferred Group Strength', info.preferredGroupSize || '', '', '', '', ''],
-    ['Groups Created', groups.length, '', '', '', ''],
+    ['Total Participants', totalStudents, '', '', '', ''],
+    ['Preferred Team Size', info.preferredGroupSize || '', '', '', '', ''],
+    ['Teams Created', groups.length, '', '', '', ''],
+    ['Expected Team Capacities', metrics.expectedCapacities.join(', '), '', '', '', ''],
+    ['Team Size Range', `${metrics.minSize}-${metrics.maxSize}`, '', '', '', ''],
+    ['Female Participants', metrics.femaleCount, '', '', '', ''],
+    ['Female-Covered Teams', `${metrics.femaleCoveredTeams}/${groups.length}`, '', '', '', ''],
+    ['Female Coverage Target', `${metrics.femaleCoverageTarget}/${groups.length}`, '', '', '', ''],
+    ['Students with Missing College Email', metrics.missingCollegeEmailCount, '', '', '', ''],
     ['Random Seed (inputs must be unchanged)', info.seed || '', '', '', '', ''],
-    ['Size Range', `${metrics.minSize}-${metrics.maxSize}`, '', '', '', ''],
-    ['Teams With >1 Genuine New', metrics.teamsWithMultipleNew, '', '', '', ''],
-    ['Supported New-Member Teams', `${metrics.supportedNewTeams}/${metrics.newMemberTeams}`, '', '', '', ''],
-    ['Female-Covered Teams', `${metrics.femaleCoveredTeams}/${groups.length} (feasible target: ${metrics.femaleCoverageTarget})`, '', '', '', ''],
-    ['Multidisciplinary Teams', `${metrics.multidisciplinaryTeams}/${groups.length} (unconstrained upper bound: ${metrics.multidisciplinaryTarget})`, '', '', '', '']
   ];
-  if (info.groupCount > info.normalGroupCount) {
-    rows.push(['Groups increased to keep new members in separate teams.', '', '', '', '', '']);
-  }
-  if (Number(info.newMemberCount) === totalStudents) {
-    rows.push(['All participants are new members, so experienced-member mentoring could not be provided.', '', '', '', '', '']);
-  }
   if (metrics.warnings.length) {
     rows.push(['Warnings', metrics.warnings.join(' '), '', '', '', '']);
   }
@@ -817,23 +647,20 @@ function writeShuffleSheet_(sheet, groups, weekKey, generatedAt, timeZone, total
   groups.forEach(group => {
     groupStarts.push(rows.length + 1);
     rows.push([`GROUP ${group.number}`, '', '', '', '', '']);
-    rows.push(['S.No', 'Name', 'Roll No', 'Dept', 'Member', 'Participation Source']);
+    rows.push(['S.No', 'Name', 'Roll Number', 'Department', 'College Email', 'Participation Source']);
     group.students.forEach((student, index) => rows.push([
       index + 1, student.fullName, student.rollNumber, student.department,
-      student.isNewMember === true ? 'New' : 'Existing',
+      student.collegeEmail || 'Missing',
       student.participationSource || 'Present'
     ]));
-    const counts = {};
-    group.students.forEach(student => { counts[student.department] = (counts[student.department] || 0) + 1; });
-    const summary = Object.keys(counts).sort().map(department => `${department} ${counts[department]}`).join(' | ');
-    rows.push([`Departments: ${summary}`, '', '', '', '', '']);
-    const groupNewCount = group.students.filter(student => student.isNewMember === true).length;
     const groupFemaleCovered = group.students.some(student => student.gender === 'Female') ? 'Yes' : 'No';
     const presentCount = group.students.filter(student => student.participationSource === 'Present').length;
+    const emails = [...new Set(group.students.map(student => student.collegeEmail).filter(Boolean))];
     rows.push([
-      `Size: ${group.students.length} | Female coverage: ${groupFemaleCovered} | New: ${groupNewCount} | Experienced: ${group.students.length - groupNewCount} | Present: ${presentCount} | Admin Added: ${group.students.length - presentCount}`,
+      `Team size: ${group.students.length}/${group.capacity} | Female coverage: ${groupFemaleCovered} | Participation: ${presentCount} Present | ${group.students.length - presentCount} Admin Added (Absent) | College emails available: ${emails.length}/${group.students.length}`,
       '', '', '', '', ''
     ]);
+    rows.push([`Team mailing list: ${emails.join(', ')}`, '', '', '', '', '']);
     rows.push(['', '', '', '', '', '']);
   });
 
@@ -874,21 +701,11 @@ function formatShuffleSheet_(sheet, rowCount, groupStarts, groups) {
   sheet.setColumnWidth(2, 220);
   sheet.setColumnWidth(3, 190);
   sheet.setColumnWidth(4, 90);
-  sheet.setColumnWidth(5, 100);
+  sheet.setColumnWidth(5, 260);
   sheet.setColumnWidth(6, 170);
 }
 
 function withShuffleLock_(callback) {
-  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    return callback();
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function withAttendanceSnapshotLock_(callback) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {

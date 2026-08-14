@@ -144,14 +144,13 @@ The browser UUID is a deterrent rather than hardware identity. Clearing all site
 ## Weekly Shuffle
 
 - [ ] Latest-session `P` students and only explicitly selected `A` students appear exactly once; participation source is preserved.
-- [ ] A same-day/bulk-registered participant with an earlier `P` is Existing. A participant with only blanks, `A`, or pre-registration markers before the latest session is New.
-- [ ] First-session and all-new populations report the resulting feasibility limitation without misclassification.
-- [ ] Group count equals the preferred-size base unless genuine-new separation requires more groups; Female or department coverage never adds groups.
+- [ ] Earlier attendance, registration date, and new/existing status do not affect participant selection or grouping.
+- [ ] Group count equals `ceil(total participants / preferred team size)`; Female availability and department distribution never change it.
 - [ ] Enough Female participants yields one Female-covered team per feasible target; fewer Female participants yields maximum coverage and the correct numerator/target.
 - [ ] `Male` and blank/unknown Gender never count as Female coverage.
-- [ ] Multidisciplinary achieved/target counts match the final department assignments, including dominant, single, and unknown-department cases.
-- [ ] New-member teams receive experienced members wherever the population allows; unsupported team count is accurate.
-- [ ] The output shows size range, genuine-new/experienced counts, source totals, coverage targets, deterministic seed, and truthful warnings without showing per-person Gender.
+- [ ] Department distribution does not affect assignment.
+- [ ] The output shows expected capacities, size range, source totals, Female coverage, missing-email count, deterministic seed, and truthful warnings without showing per-person Gender.
+- [ ] Every team includes stored valid College Email values once and a copyable deduplicated mailing list; missing addresses remain Missing and generate a warning.
 - [ ] Repeating a controlled run with the same session, participants, history, and seed produces the same assignment.
 
 ## Session Administration

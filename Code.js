@@ -743,7 +743,7 @@ function submitAttendance(sessionToken, rollNumber, fullName, officialEmail, gen
   if (isNewRegistration && !isValidOfficialEmail(officialEmail, normalizedRollNo)) {
     return {
       success: false,
-      error: `Use your official college email: ${getOfficialEmailForRollNo(normalizedRollNo)}.`
+      error: 'Use the official college email that exactly matches your roll number.'
     };
   }
   const submittedGender = normalizeGender(gender);

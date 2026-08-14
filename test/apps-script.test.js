@@ -608,7 +608,7 @@ test('rejects first-time registration when official email does not match the rol
   );
 
   assert.equal(result.success, false);
-  assert.match(result.error, new RegExp(OFFICIAL_EMAIL.replace(/\./g, '\\.')));
+  assert.match(result.error, /official college email.*matches your roll number/i);
   assert.equal(environment.studentRows.length, 0);
   assert.equal(environment.checkins.length, 0);
 

@@ -585,9 +585,11 @@ Rollback is operator-controlled. If verification fails, close attendance, retain
 - Existing students with a blank Gender see one required `Male` then `Female` choice before confirmation. A valid stored value skips the prompt on future attendance.
 - New registrations require the same choice. The Apps Script server re-reads and writes the student row by normalized roll under `LockService`; it never overwrites a nonblank valid value.
 - If Gender saves but a later attendance write fails, attendance is not reported as confirmed. Retrying skips Gender and safely retries attendance through existing duplicate enforcement.
-- Shuffle participants remain latest-session `P` plus explicitly selected `A` students. `New` now means no `P` in any validated session strictly before the latest session; registration date is not used.
-- Group count is `max(ceil(participants / preferred strength), genuine new count)`. Gender and department objectives never increase it.
-- The seeded candidate search prioritizes exact membership, one genuine newcomer per team, experienced support, Female coverage, multidisciplinary coverage, balanced size, and repeat avoidance. Output reports achieved/target coverage, warnings, participation sources, and the PRNG seed without exposing per-person Gender. Reproduction requires the same participant metadata and Shuffle history as well as the displayed seed.
+- Shuffle participants are latest-session `P` plus only the latest-session absent students explicitly selected by an administrator. Selection never changes attendance markers.
+- Group count is exactly `ceil(participants / preferred team size)`. New-member status, registration date, earlier attendance, department distribution, and Female availability never change it.
+- The seeded construction creates balanced capacities no larger than the preferred size, places one Female participant in as many teams as mathematically possible, then fills the smallest available teams with seeded tie-breaking.
+- Shuffle reads only stored valid `Official Email` values. Administrator output includes a College Email column and deduplicated team mailing list; missing or invalid addresses produce warnings without removing participants.
+- Output reports team capacities, size range, Female coverage, source totals, missing-email count, warnings, and the PRNG seed without exposing per-person Gender. Reproduction requires unchanged participant metadata and the same seed.
 
 ### Step 2: Upload Apps Script changes
 
